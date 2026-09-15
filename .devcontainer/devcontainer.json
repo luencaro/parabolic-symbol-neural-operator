@@ -1,0 +1,17 @@
+{
+    "name": "parabolic-symbol-neural-operator",
+    "image": "mcr.microsoft.com/devcontainers/python:3.14",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+                "python.terminal.activateEnvironment": true
+            },
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance"
+            ]
+        }
+    },
+    "postCreateCommand": "bash -c 'if [ ! -d .venv ]; then python -m venv .venv; fi && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r requirements.txt'"
+}

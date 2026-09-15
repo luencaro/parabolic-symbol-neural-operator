@@ -1,0 +1,12 @@
+version: 1
+
+project:
+  title: Verificacion de simbolos parabolicos
+  description: Exploracion numerica de simbolos parabolicos.
+  authors:
+    - name: Parabolic Symbol Verification
+  toc:
+    - file: ../notebooks/exploration.ipynb
+
+site:
+  template: book-theme

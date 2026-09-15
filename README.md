@@ -1,0 +1,1 @@
+# Verificacion de simbolos parabolicos
