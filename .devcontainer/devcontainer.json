@@ -1,6 +1,10 @@
 {
     "name": "parabolic-symbol-neural-operator",
     "image": "mcr.microsoft.com/devcontainers/python:3.14",
+    "runArgs": [
+        "--gpus",
+        "all"
+    ],
     "customizations": {
         "vscode": {
             "settings": {
