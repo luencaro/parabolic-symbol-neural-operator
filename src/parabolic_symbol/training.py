@@ -22,7 +22,12 @@ import numpy as np
 import torch
 
 from .Symbol import Symbol
-from .symbols.mlp_symbol import MLPSymbol, default_device
+from .symbols.mlp_symbol import (
+    DropoutPlacement,
+    MLPSymbol,
+    default_device,
+    dropout_layer_indices,
+)
 
 Split = Dict[str, torch.Tensor]
 PhasePoints = Tuple[torch.Tensor, torch.Tensor]
@@ -220,6 +225,55 @@ def evaluate_split(
     }
 
 
+@torch.no_grad()
+def trajectory_report(symbol: MLPSymbol, data: Split) -> Dict[str, float]:
+    """Metricas de regresion de la trayectoria sobre un conjunto completo.
+
+    La prediccion es compleja, asi que el error de cada muestra es el modulo del
+    residuo |u_pred - u_ref| y todas las metricas se derivan de el. `r2` usa la
+    varianza compleja de u_ref como referencia.
+    """
+    was_training = symbol.net.training
+    symbol.net.eval()
+    data = to_device(data, symbol.device, symbol.dtype)
+
+    pred = torch.exp(-data["t"] * symbol.forward(data["k"])) * data["u0"]
+    ref = data["u_ref"]
+    err = torch.abs(pred - ref)
+    sq_sum = torch.sum(err**2)
+    mse = sq_sum / err.numel()
+
+    symbol.net.train(was_training)
+    return {
+        "n": float(err.numel()),
+        "mse": float(mse),
+        "rmse": float(torch.sqrt(mse)),
+        "mae": float(err.mean()),
+        "max_error": float(err.max()),
+        "rel_l2": float(torch.sqrt(sq_sum / torch.sum(torch.abs(ref) ** 2))),
+        "r2": float(1.0 - sq_sum / torch.sum(torch.abs(ref - ref.mean()) ** 2)),
+    }
+
+
+def symbol_report(symbol: MLPSymbol, reference: Symbol, k_values) -> Dict[str, float]:
+    """Metricas de a_theta(k) frente al simbolo de referencia sobre una rejilla.
+
+    Mide el simbolo en si, no la trayectoria: es la cantidad que la teoria
+    acota, mientras que la perdida solo ve a_theta a traves de exp(-t a_theta).
+    """
+    k = np.asarray(k_values, dtype=float).reshape(-1, symbol.n)
+    a_ref = np.array([reference(row)[0, 0] for row in k])
+    err = np.abs(symbol.evaluate_batch(k) - a_ref)
+    return {
+        "n": float(err.size),
+        "mse": float(np.mean(err**2)),
+        "rmse": float(np.sqrt(np.mean(err**2))),
+        "mae": float(err.mean()),
+        "max_error": float(err.max()),
+        "rel_l2": float(np.linalg.norm(err) / np.linalg.norm(a_ref)),
+    }
+
+
 # ----------------------------------------------------------------------
 # Entrenamiento
 # ----------------------------------------------------------------------
@@ -229,6 +283,7 @@ class TrainingConfig:
     batch_size: int = 1024
     lr: float = 1e-3
     lr_final: Optional[float] = None  # si se da, decae exponencialmente hasta este valor
+    weight_decay: float = 0.0    # AdamW desacoplado, solo en las Linear ocultas interiores
     omega: float = 1.0
     kappa: float = 3.0
     lambda_trajectory: float = 1.0
@@ -267,7 +322,15 @@ def train(
     torch.manual_seed(config.seed)
     gen = torch.Generator().manual_seed(config.seed)
     params = list(symbol.parameters())
-    optimizer = torch.optim.Adam(params, lr=config.lr)
+    decayed = symbol.decay_parameters()
+    decayed_ids = {id(p) for p in decayed}
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": decayed, "weight_decay": config.weight_decay},
+            {"params": [p for p in params if id(p) not in decayed_ids], "weight_decay": 0.0},
+        ],
+        lr=config.lr,
+    )
     scheduler = None
     if config.lr_final is not None:
         gamma = (config.lr_final / config.lr) ** (1.0 / config.epochs)
@@ -286,6 +349,14 @@ def train(
         ),
     }
     splits = {"train": train_data, "val": val_data}
+
+    if config.log_every:
+        capas = ",".join(str(i) for i in symbol.dropout_layers) or "-"
+        estado = f"p={symbol.dropout:g} en capas[{capas}]" if symbol.dropout_layers else "OFF"
+        print(
+            f"hidden={symbol.hidden} | dropout {estado} | "
+            f"weight_decay={config.weight_decay:g} en {len(decayed)} Linear interiores"
+        )
 
     n_data = train_data["k"].shape[0]
     history = {name: {key: [] for key in METRICS} for name in splits}
@@ -335,11 +406,12 @@ def train(
             best_state = copy.deepcopy(symbol.net.state_dict())
 
         if config.log_every and epoch % config.log_every == 0:
+            val = {key: history["val"][key][-1] for key in METRICS}
             print(
-                f"epoca {epoch:4d} | val total {val_total:.3e} | "
-                f"val traj {history['val']['trajectory'][-1]:.3e} | "
-                f"val par {history['val']['parabolicity'][-1]:.3e} | "
-                f"val rel_l2 {history['val']['rel_l2'][-1]:.3e}"
+                f"epoca {epoch:4d} | val: total={val['total']:.3e} "
+                f"traj={val['trajectory']:.3e} par={val['parabolicity']:.3e} "
+                f"rel_l2={val['rel_l2']:.4f} max_ratio={val['par_max_ratio']:.3f} "
+                f"viol={100 * val['par_violation']:5.2f}%"
             )
 
         if config.patience and epoch - best_epoch >= config.patience:
@@ -367,15 +439,32 @@ class SweepRun:
     kappa: float
     n_layers: int
     width: int
-    satisfied: bool          # la cota se cumple en TODA la rejilla de comprobacion
+    dropout_rate: float          # tasa efectiva: 0.0 si ninguna capa lleva dropout
+    dropout_layers: str          # etiqueta de la ubicacion ("none", "all", ...)
+    dropout_indices: Tuple[int, ...]  # capas ocultas que efectivamente llevan dropout
+    weight_decay: float
+    satisfied: bool         # la cota se cumple en TODA la rejilla de comprobacion
     max_ratio: float         # sup del ratio sobre esa rejilla (<= 1 <=> satisfied)
+    # Las seis metricas de validacion en la mejor epoca (las mismas de METRICS).
     val_total: float
+    val_trajectory: float
+    val_parabolicity: float
     val_rel_l2: float
+    val_par_max_ratio: float
+    val_par_violation: float
     best_epoch: int
     epochs_run: int
     seconds: float
     symbol: MLPSymbol = field(repr=False)
     result: TrainingResult = field(repr=False)
+
+    @property
+    def dropout_desc(self) -> str:
+        """Como se imprime la configuracion de dropout en los logs."""
+        if not self.dropout_indices or self.dropout_rate == 0.0:
+            return "OFF"
+        capas = ",".join(str(i) for i in self.dropout_indices)
+        return f"ON p={self.dropout_rate:g} capas[{capas}]"
 
 
 @torch.no_grad()
@@ -396,24 +485,41 @@ def run_sweep(
     base_config: TrainingConfig,
     check_phase: PhasePoints,
     dropout: float = 0.2,
+    dropout_layers: Sequence[DropoutPlacement] = ("none",),
+    weight_decays: Sequence[float] = (0.0,),
     input_scale: float = 1.0,
     output_scale: float = 1.0,
     device: Optional[torch.device] = None,
     dtype: torch.dtype = torch.float64,
     verbose: bool = True,
 ) -> List[SweepRun]:
-    """Entrena una red por cada (kappa, profundidad, ancho) y reporta si cumple.
+    """Entrena una red por cada (kappa, profundidad, ancho, ubicacion, weight_decay).
 
     `check_phase` es la rejilla fija sobre la que se decide si un kappa se
     satisface (max_ratio <= 1), independiente de los puntos usados en la perdida.
+
+    La tasa de dropout `dropout` es fija; el eje que se barre es
+    `dropout_layers`, donde se coloca ese dropout. Dos ubicaciones que resuelven
+    a las mismas capas para una profundidad dada (p.ej. "middle" y "none" con
+    solo dos capas ocultas) se entrenan una sola vez.
     """
     device = device if device is not None else default_device()
     runs: List[SweepRun] = []
+    seen = set()
 
-    for kappa, n_layers, width in itertools.product(kappas, depths, widths):
-        config = replace(base_config, kappa=kappa)
+    for kappa, n_layers, width, placement, weight_decay in itertools.product(
+        kappas, depths, widths, dropout_layers, weight_decays
+    ):
+        indices = dropout_layer_indices(placement, n_layers)
+        key = (kappa, n_layers, width, indices, weight_decay)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        config = replace(base_config, kappa=kappa, weight_decay=weight_decay)
         symbol = MLPSymbol(
-            n=n, m=m, hidden=(width,) * n_layers, dropout=dropout,
+            n=n, m=m, hidden=(width,) * n_layers,
+            dropout=dropout, dropout_layers=indices,
             input_scale=input_scale, output_scale=output_scale,
             seed=base_config.seed, device=device, dtype=dtype,
         )
@@ -423,14 +529,23 @@ def run_sweep(
         seconds = time.perf_counter() - start
 
         max_ratio = max_ratio_on(symbol, check_phase, config.omega, kappa)
+        val = {key: result.history["val"][key][result.best_epoch - 1] for key in METRICS}
         run = SweepRun(
             kappa=kappa,
             n_layers=n_layers,
             width=width,
+            dropout_rate=symbol.dropout if indices else 0.0,
+            dropout_layers=placement if isinstance(placement, str) else str(indices),
+            dropout_indices=indices,
+            weight_decay=weight_decay,
             satisfied=max_ratio <= 1.0,
             max_ratio=max_ratio,
-            val_total=result.history["val"]["total"][result.best_epoch - 1],
-            val_rel_l2=result.history["val"]["rel_l2"][result.best_epoch - 1],
+            val_total=val["total"],
+            val_trajectory=val["trajectory"],
+            val_parabolicity=val["parabolicity"],
+            val_rel_l2=val["rel_l2"],
+            val_par_max_ratio=val["par_max_ratio"],
+            val_par_violation=val["par_violation"],
             best_epoch=result.best_epoch,
             epochs_run=result.epochs_run,
             seconds=seconds,
@@ -440,11 +555,14 @@ def run_sweep(
         runs.append(run)
 
         if verbose:
-            flag = "cumple" if run.satisfied else "NO cumple"
+            flag = "CUMPLE   " if run.satisfied else "NO cumple"
             print(
                 f"kappa={kappa:6.3f} capas={n_layers} ancho={width:3d} | "
-                f"{flag} (max ratio {max_ratio:.3f}) | "
-                f"val rel_l2 {run.val_rel_l2:.4f} | "
+                f"dropout {run.dropout_desc} | wd={weight_decay:.0e} | "
+                f"{flag} max_ratio(rejilla)={max_ratio:.3f}\n"
+                f"    val: total={run.val_total:.3e} traj={run.val_trajectory:.3e} "
+                f"par={run.val_parabolicity:.3e} rel_l2={run.val_rel_l2:.4f} "
+                f"max_ratio={run.val_par_max_ratio:.3f} viol={100 * run.val_par_violation:5.2f}% | "
                 f"epocas {run.epochs_run:3d} (mejor {run.best_epoch:3d}) | {seconds:5.1f}s"
             )
 
@@ -472,10 +590,18 @@ def sweep_table(runs: Sequence[SweepRun]):
                 "kappa": run.kappa,
                 "capas": run.n_layers,
                 "ancho": run.width,
+                "dropout": run.dropout_desc,
+                "dropout_layers": run.dropout_layers,
+                "dropout_rate": run.dropout_rate,
+                "weight_decay": run.weight_decay,
                 "cumple": run.satisfied,
                 "max_ratio": run.max_ratio,
-                "val_rel_l2": run.val_rel_l2,
                 "val_total": run.val_total,
+                "val_trajectory": run.val_trajectory,
+                "val_parabolicity": run.val_parabolicity,
+                "val_rel_l2": run.val_rel_l2,
+                "val_par_max_ratio": run.val_par_max_ratio,
+                "val_par_violation": run.val_par_violation,
                 "mejor_epoca": run.best_epoch,
                 "epocas": run.epochs_run,
                 "segundos": run.seconds,
