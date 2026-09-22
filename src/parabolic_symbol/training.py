@@ -81,7 +81,7 @@ def make_trajectory_data(
 def split_trajectory_data(
     data: Split, val_fraction: float = 0.2, seed: int = 0
 ) -> Tuple[Split, Split]:
-    """Particion aleatoria en entrenamiento y validacion (sin conjunto de prueba)."""
+    """Particion aleatoria en entrenamiento y validacion."""
     n = data["k"].shape[0]
     perm = torch.randperm(n, generator=torch.Generator().manual_seed(seed))
     n_val = int(round(val_fraction * n))
@@ -115,9 +115,6 @@ def sample_phase_points(
 
     |lambda| es log-uniforme en [lam_min, lam_max] y arg(lambda) in [-pi/2, pi/2].
     La mitad de las muestras cae en la frontera Re(lambda) = 0.
-
-    Se genera en CPU (para que el generador de numeros aleatorios de resultados
-    reproducibles en CPU y GPU) y luego se mueve al device.
     """
     k = torch.randint(-k_max, k_max + 1, (batch_size, n), generator=generator).to(torch.float64)
     u = torch.rand(batch_size, generator=generator, dtype=torch.float64)
@@ -256,11 +253,7 @@ def trajectory_report(symbol: MLPSymbol, data: Split) -> Dict[str, float]:
 
 
 def symbol_report(symbol: MLPSymbol, reference: Symbol, k_values) -> Dict[str, float]:
-    """Metricas de a_theta(k) frente al simbolo de referencia sobre una rejilla.
-
-    Mide el simbolo en si, no la trayectoria: es la cantidad que la teoria
-    acota, mientras que la perdida solo ve a_theta a traves de exp(-t a_theta).
-    """
+    """Metricas de a_theta(k) frente al simbolo de referencia sobre una rejilla."""
     k = np.asarray(k_values, dtype=float).reshape(-1, symbol.n)
     a_ref = np.array([reference(row)[0, 0] for row in k])
     err = np.abs(symbol.evaluate_batch(k) - a_ref)
@@ -499,9 +492,7 @@ def run_sweep(
     satisface (max_ratio <= 1), independiente de los puntos usados en la perdida.
 
     La tasa de dropout `dropout` es fija; el eje que se barre es
-    `dropout_layers`, donde se coloca ese dropout. Dos ubicaciones que resuelven
-    a las mismas capas para una profundidad dada (p.ej. "middle" y "none" con
-    solo dos capas ocultas) se entrenan una sola vez.
+    `dropout_layers`, donde se coloca ese dropout.
     """
     device = device if device is not None else default_device()
     runs: List[SweepRun] = []
