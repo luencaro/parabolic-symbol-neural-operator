@@ -1,7 +1,10 @@
-"""Simbolo aprendido a_theta: Z^n -> C mediante una MLP completamente conectada.
+"""Simbolo aprendido a_theta: Z^n -> R mediante una MLP completamente conectada.
 
-La red recibe k (vector de Z^n) y devuelve dos numeros reales
-(Re a_theta(k), Im a_theta(k)).
+La red recibe k (vector de Z^n) y devuelve un unico numero real a_theta(k): el
+simbolo objetivo es el Laplaciano (fraccionario) del toro, a(k) = |k|^alpha, que
+es real para todo k, asi que no hay parte imaginaria que aprender. La conversion
+a complejo se hace solo en el borde (`evaluate`/`evaluate_batch`), para cumplir la
+interfaz de `Symbol`, que si admite simbolos complejos.
 """
 from __future__ import annotations
 
@@ -50,7 +53,7 @@ def dropout_layer_indices(placement: DropoutPlacement, n_hidden: int) -> Tuple[i
 
 
 class MLPSymbol(Symbol):
-    """a_theta(k) = MLP(k), caso escalar (E = C).
+    """a_theta(k) = MLP(k), caso escalar real (E = C, pero a(k) in R).
 
     Parameters
     n : int
@@ -60,7 +63,8 @@ class MLPSymbol(Symbol):
     hidden : secuencia de int
         Ancho de cada capa oculta.
     rho : int, opcional
-        Parametro de regularidad (por defecto ceil(m) + 1).
+        Parametro de regularidad (por defecto n + 1). El Teorema 2.1 exige
+        rho >= n + 1, sin relacion con m; un rho menor levanta ValueError.
     input_scale, output_scale : float
         Constantes fijas: la red ve k / input_scale y su salida se multiplica
         por output_scale. Solo cambian unidades, no restringen la forma.
@@ -92,10 +96,15 @@ class MLPSymbol(Symbol):
         indices = dropout_layer_indices(dropout_layers, len(hidden))
         if not 0.0 <= dropout < 1.0:
             raise ValueError(f"la tasa de dropout debe estar en [0, 1): {dropout}")
+        rho = n + 1 if rho is None else int(rho)
+        if rho < n + 1:
+            raise ValueError(
+                f"el Teorema 2.1 exige rho >= n + 1 = {n + 1}; se recibio rho={rho}"
+            )
         super().__init__(
             n=n,
             m=m,
-            rho=rho if rho is not None else int(np.ceil(m)) + 1,
+            rho=rho,
             dim=1,
             name=(
                 f"MLPSymbol(hidden={hidden}, "
@@ -117,7 +126,7 @@ class MLPSymbol(Symbol):
         self.device = torch.device(device) if device is not None else default_device()
         self.dtype = dtype
 
-        # Capas ocultas con Tanh (+ dropout), salida lineal de 2 componentes (Re, Im)
+        # Capas ocultas con Tanh (+ dropout), salida lineal de 1 componente (a real)
         layers = []
         width_in = n
         for i, width in enumerate(hidden):
@@ -125,7 +134,7 @@ class MLPSymbol(Symbol):
             if self.dropout > 0.0 and i in indices:
                 layers.append(nn.Dropout(self.dropout))
             width_in = width
-        layers.append(nn.Linear(width_in, 2))
+        layers.append(nn.Linear(width_in, 1))
         self.net = nn.Sequential(*layers).to(device=self.device, dtype=self.dtype)
 
     def parameters(self):
@@ -148,15 +157,19 @@ class MLPSymbol(Symbol):
     def forward(self, k: torch.Tensor) -> torch.Tensor:
         """Version en torch, por lotes.
 
-        k: tensor (batch, n). Devuelve a_theta(k) complejo de forma (batch,).
+        k: tensor (batch, n). Devuelve a_theta(k) REAL de forma (batch,), en
+        `self.dtype`. Al combinarlo con lambda o con coeficientes de Fourier
+        complejos, torch promueve el resultado a complejo por si solo.
         """
         k = k.to(device=self.device, dtype=self.dtype)
         out = self.net(k / self.input_scale) * self.output_scale
-        return torch.complex(out[:, 0], out[:, 1])
+        return out[:, 0]
 
     def evaluate_batch(self, k: np.ndarray) -> np.ndarray:
         """a_theta sobre un lote: k de forma (N, n) -> vector complejo (N,).
 
+        La red calcula en real; el casteo a complejo es solo la conversion de
+        borde que pide la interfaz de `Symbol`.
         Siempre en modo eval, asi el dropout no altera la evaluacion.
         """
         k = np.asarray(k, dtype=float).reshape(-1, self.n)
