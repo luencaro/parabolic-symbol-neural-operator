@@ -81,14 +81,24 @@ def make_trajectory_data(
 def split_trajectory_data(
     data: Split, val_fraction: float = 0.2, seed: int = 0
 ) -> Tuple[Split, Split]:
-    """Particion aleatoria en entrenamiento y validacion."""
-    n = data["k"].shape[0]
-    perm = torch.randperm(n, generator=torch.Generator().manual_seed(seed))
-    n_val = int(round(val_fraction * n))
-    val_idx, train_idx = perm[:n_val], perm[n_val:]
+    """Particion por k en entrenamiento y validacion.
+
+    `make_trajectory_data` muestrea k con reemplazo de una rejilla pequena, asi
+    que una particion por muestra dejaria casi todos los k de validacion
+    tambien en entrenamiento (fuga). Aqui se reparten los k *unicos*: cada k
+    cae entero en un solo conjunto, y la validacion mide generalizacion a k no
+    vistos. `val_fraction` es entonces la fraccion de k unicos, no de muestras.
+    """
+    unique_k, inverse = torch.unique(data["k"], dim=0, return_inverse=True)
+    n_unique = unique_k.shape[0]
+    perm = torch.randperm(n_unique, generator=torch.Generator().manual_seed(seed))
+    n_val = int(round(val_fraction * n_unique))
+    is_val = torch.zeros(n_unique, dtype=torch.bool)
+    is_val[perm[:n_val]] = True
+    val_mask = is_val[inverse]
     return (
-        {key: value[train_idx] for key, value in data.items()},
-        {key: value[val_idx] for key, value in data.items()},
+        {key: value[~val_mask] for key, value in data.items()},
+        {key: value[val_mask] for key, value in data.items()},
     )
 
 
@@ -496,8 +506,11 @@ def run_sweep(
     """
     device = device if device is not None else default_device()
     runs: List[SweepRun] = []
-    seen = set()
 
+    # Se materializan las combinaciones antes de entrenar (mismo orden y misma
+    # deduplicacion que antes) solo para poder imprimir [i/total].
+    combos = []
+    seen = set()
     for kappa, n_layers, width, placement, weight_decay in itertools.product(
         kappas, depths, widths, dropout_layers, weight_decays
     ):
@@ -506,7 +519,10 @@ def run_sweep(
         if key in seen:
             continue
         seen.add(key)
+        combos.append((kappa, n_layers, width, placement, indices, weight_decay))
 
+    total = len(combos)
+    for i, (kappa, n_layers, width, placement, indices, weight_decay) in enumerate(combos, 1):
         config = replace(base_config, kappa=kappa, weight_decay=weight_decay)
         symbol = MLPSymbol(
             n=n, m=m, hidden=(width,) * n_layers,
@@ -546,15 +562,13 @@ def run_sweep(
         runs.append(run)
 
         if verbose:
-            flag = "CUMPLE   " if run.satisfied else "NO cumple"
+            # Una linea por corrida: lo demas queda en el SweepRun y en sweep_table.
+            capas_drop = ",".join(str(j) for j in indices) if run.dropout_rate else "-"
             print(
-                f"kappa={kappa:6.3f} capas={n_layers} ancho={width:3d} | "
-                f"dropout {run.dropout_desc} | wd={weight_decay:.0e} | "
-                f"{flag} max_ratio(rejilla)={max_ratio:.3f}\n"
-                f"    val: total={run.val_total:.3e} traj={run.val_trajectory:.3e} "
-                f"par={run.val_parabolicity:.3e} rel_l2={run.val_rel_l2:.4f} "
-                f"max_ratio={run.val_par_max_ratio:.3f} viol={100 * run.val_par_violation:5.2f}% | "
-                f"epocas {run.epochs_run:3d} (mejor {run.best_epoch:3d}) | {seconds:5.1f}s"
+                f"[{i:3d}/{total}] kappa={kappa:6.3f} {n_layers}x{width:<3d} "
+                f"drop[{capas_drop}] wd={weight_decay:.0e} | "
+                f"{'CUMPLE   ' if run.satisfied else 'NO cumple'} "
+                f"rel_l2={run.val_rel_l2:.4f} | {seconds:5.1f}s"
             )
 
     return runs
