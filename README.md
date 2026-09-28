@@ -2,7 +2,7 @@
 
 Aprendizaje del símbolo $a_\theta:\mathbb Z^n\to\mathbb R$ del **generador** de un problema de Cauchy parabólico sobre el toro $\mathbb T^n$,
 
-$$\partial_t u + \operatorname{op}[a_\theta]\,u = 0,\qquad u(0)=u_0,$$
+$$\partial_t u + \mathrm{op}[a_\theta]\,u = 0,\qquad u(0)=u_0,$$
 
 con una red neuronal y una pérdida tipo PINN que penaliza la parabolicidad (Def. 2.3) y la pertenencia a la clase $S^{m,\rho}$ (Def. 2.1). La referencia es el calor, $a(k)=|k|^2$. El repositorio también incluye verificadores numéricos para ambas definiciones.
 
@@ -79,7 +79,7 @@ Todas las pérdidas llaman a `forward`, en [`losses.py`](src/parabolic_symbol/lo
 | Término | Función | Qué calcula |
 |---|---|---|
 | $\mathcal L_{\text{traj}}$ | `trajectory_loss` | $\mathbb E\,\lvert e^{-ta_\theta(k)}\widehat u_0(k)-\widehat u(k,t)\rvert^2$ |
-| $\mathcal L_{\text{par}}$ | `parabolicity_loss` | hinge² de $\lvert(a_\theta(k)+\lambda)^{-1}\rvert\le\kappa\langle k,\lambda\rangle^{-m}$, sobre $\operatorname{Re}\lambda\ge0$ y $\lvert(k,\lambda)\rvert\ge\omega$ |
+| $\mathcal L_{\text{par}}$ | `parabolicity_loss` | hinge² de $\lvert(a_\theta(k)+\lambda)^{-1}\rvert\le\kappa\langle k,\lambda\rangle^{-m}$, sobre $\mathrm{Re}\,\lambda\ge0$ y $\lvert(k,\lambda)\rvert\ge\omega$ |
 | $\mathcal L_{\text{class}}$ | `class_loss` | hinge² de $\langle k\rangle^{\lvert\beta\rvert-m}\lvert\triangle_k^\beta a_\theta(k)\rvert\le C_\beta$ para $\lvert\beta\rvert\le\rho$ |
 
 Las diferencias finitas $\triangle_k^\beta$ se calculan evaluando `forward` en $k+\gamma$ para todo $\gamma\le\beta$ en un solo lote. Por eso $\mathcal L_{\text{class}}$ es diferenciable.
