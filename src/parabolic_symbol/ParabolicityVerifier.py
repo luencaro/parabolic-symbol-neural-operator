@@ -107,15 +107,12 @@ class ParabolicityVerifier:
         lam_values: Iterable[complex],
         omega: float,
     ) -> float:
-        """Estima (por rejilla, no analiticamente) la kappa minima consistente
+        """Estima por rejill ala kappa minima consistente
         con la region muestreada:
 
             kappa_hat = sup_{(k,lambda) en la rejilla, region valida}
                         ||(a(k)+lambda*Id)^{-1}|| * (1+|(k,lambda)|^2)^{m/2}
 
-        Nota: esto es una COTA INFERIOR de la kappa real (una rejilla finita
-        puede no capturar el peor caso). Sirve para tener un valor de
-        referencia con el que despues correr `check_region`.
         """
         worst = 0.0
         for k in k_values:

@@ -11,8 +11,8 @@ from ..Symbol import Symbol
 class FractionalLaplacianSymbol(Symbol):
     """a(k) = |k|^alpha, E = C, m = alpha.
 
-    Cuando alpha/2 no es entero, (-Delta)^{alpha/2} no es un operador
-    diferencial sino genuinamente pseudo-diferencial.
+    Cuando alpha/2 no es entero, tenemos un operador
+    pseudo-diferencial.
     """
 
     def __init__(self, n: int, alpha: float, rho: Optional[int] = None):

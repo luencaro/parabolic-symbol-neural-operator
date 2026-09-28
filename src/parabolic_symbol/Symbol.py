@@ -20,7 +20,8 @@ class Symbol(ABC):
     m : float
         Orden del simbolo.
     rho : int
-        Parametro de regularidad de la clase S^{m,rho} (tipicamente rho >= m+1).
+        Parametro de regularidad de la clase S^{m,rho} (el Teorema 2.1 exige
+        rho >= n+1).
     dim : int
         Dimension del espacio E sobre el que actua a(k) (dim=1 => caso escalar).
     name : str, opcional
@@ -38,7 +39,7 @@ class Symbol(ABC):
         if n < 1:
             raise ValueError("n debe ser un entero >= 1.")
         if rho < 1:
-            raise ValueError("rho debe ser un entero >= 1 (usualmente rho >= m+1).")
+            raise ValueError("rho debe ser un entero >= 1 (el Teorema 2.1 exige rho >= n+1).")
         if dim < 1:
             raise ValueError("dim (dimension de E) debe ser >= 1.")
 
