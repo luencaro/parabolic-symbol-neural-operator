@@ -107,6 +107,23 @@ def sample_phase_points(
     )
 
 
+def sample_k_points(
+    n: int,
+    k_max: int,
+    batch_size: int,
+    generator: Optional[torch.Generator] = None,
+    device: Optional[torch.device] = None,
+    dtype: torch.dtype = torch.float64,
+) -> torch.Tensor:
+    """Muestra k uniformes en {|k_i| <= k_max}, forma (batch, n).
+
+    Para terminos que solo dependen de k (la cota de la Def. 2.1), con un
+    muestreo propio, independiente de las muestras de trayectoria.
+    """
+    k = torch.randint(-k_max, k_max + 1, (batch_size, n), generator=generator)
+    return k.to(device=device, dtype=dtype)
+
+
 def phase_grid(
     n: int,
     k_max: int,

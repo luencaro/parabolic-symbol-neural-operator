@@ -7,7 +7,8 @@ pendiente de agregar.
 """
 from __future__ import annotations
 
-from typing import Dict, Tuple
+import itertools
+from typing import Dict, List, Tuple
 
 import torch
 
@@ -19,3 +20,15 @@ PhasePoints = Tuple[torch.Tensor, torch.Tensor]
 
 def complex_dtype(dtype: torch.dtype) -> torch.dtype:
     return torch.complex64 if dtype == torch.float32 else torch.complex128
+
+
+def multi_indices(n: int, rho: int) -> List[Tuple[int, ...]]:
+    """Todos los multiindices alpha in N_0^n con |alpha| <= rho (Def. 2.1).
+
+    Ordenados por |alpha| y luego lexicograficamente, asi el listado es estable
+    entre corridas. Incluye alpha = 0, que es la cota sobre el propio a(k).
+    """
+    return sorted(
+        (alpha for alpha in itertools.product(range(rho + 1), repeat=n) if sum(alpha) <= rho),
+        key=lambda alpha: (sum(alpha), alpha),
+    )

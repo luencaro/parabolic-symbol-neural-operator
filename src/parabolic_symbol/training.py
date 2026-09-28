@@ -2,6 +2,7 @@
 
 Perdida total:
     L = lambda_trajectory * L_traj + lambda_parabolicity * L_par
+        + lambda_class * L_class
 
 Los terminos estan en `losses.py`, los datos en `data.py` y las metricas en
 `evaluation.py`. El barrido que elige kappa y arquitectura esta en `sweep.py`.
@@ -14,9 +15,9 @@ from typing import Dict, List, Optional
 
 import torch
 
-from .data import sample_phase_points, to_device
+from .data import sample_k_points, sample_phase_points, to_device
 from .evaluation import METRICS, evaluate_split
-from .losses import parabolicity_loss, trajectory_loss
+from .losses import ClassConstants, class_loss, parabolicity_loss, trajectory_loss
 from .symbols.mlp_symbol import MLPSymbol
 from .utils import Split
 
@@ -32,6 +33,8 @@ class TrainingConfig:
     kappa: float = 3.0
     lambda_trajectory: float = 1.0
     lambda_parabolicity: float = 1.0
+    lambda_class: float = 1.0    # peso de L_class (Def. 2.1); 0 lo apaga
+    class_C: ClassConstants = 1.0  # C_alpha: un escalar, o {alpha: C_alpha}
     k_max: int = 8               # ventana de k para los puntos de parabolicidad
     lam_min: float = 1e-2        # rango de |lambda| muestreado
     lam_max: float = 1e2
@@ -58,6 +61,10 @@ def train(
     """Entrena a_theta con Adam y early stopping sobre la perdida de validacion.
 
     Al terminar, los pesos del simbolo quedan en los de la mejor epoca.
+
+    Con `lambda_class > 0` la perdida optimizada incluye L_class, pero las
+    metricas de `evaluate_split` (y con ellas el "total" del early stopping)
+    siguen siendo solo trayectoria + parabolicidad.
     """
     device, dtype = symbol.device, symbol.dtype
     train_data = to_device(train_data, device, dtype)
@@ -129,6 +136,12 @@ def train(
             l_par = parabolicity_loss(symbol, k_p, lam_p, config.omega, config.kappa)
 
             loss = config.lambda_trajectory * l_traj + config.lambda_parabolicity * l_par
+
+            if config.lambda_class:
+                # Puntos k propios de este termino, independientes de las muestras
+                # de trayectoria y de los puntos de parabolicidad.
+                k_c = sample_k_points(symbol.n, config.k_max, len(idx), gen, device, dtype)
+                loss = loss + config.lambda_class * class_loss(symbol, k_c, config.class_C)
 
             optimizer.zero_grad()
             loss.backward()
