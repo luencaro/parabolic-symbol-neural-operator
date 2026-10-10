@@ -1,29 +1,39 @@
 """Metricas sobre conjuntos completos: trayectoria, simbolo y parabolicidad."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING, Dict, Optional
 
 import numpy as np
 import torch
 
 from .Symbol import Symbol
 from .data import to_device
-from .losses import parabolicity_terms
-from .symbols.mlp_symbol import MLPSymbol
-from .utils import PhasePoints, Split
+from .losses import class_loss, parabolicity_terms
+from .utils import LearnedSymbol, PhasePoints, Split
 
 if TYPE_CHECKING:  # solo para anotar: en runtime seria el ciclo training <-> evaluation
     from .training import TrainingConfig
 
-# Las seis metricas que `evaluate_split` devuelve y que `train` registra por epoca.
-METRICS = ("total", "trajectory", "parabolicity", "rel_l2", "par_max_ratio", "par_violation")
+# Las siete metricas que `evaluate_split` devuelve y que `train` registra por epoca.
+METRICS = (
+    "total", "trajectory", "parabolicity", "class", "rel_l2", "par_max_ratio", "par_violation"
+)
 
 
 @torch.no_grad()
 def evaluate_split(
-    symbol: MLPSymbol, data: Split, phase: PhasePoints, config: "TrainingConfig"
+    symbol: LearnedSymbol,
+    data: Split,
+    phase: PhasePoints,
+    config: "TrainingConfig",
+    class_k: Optional[torch.Tensor] = None,
 ) -> Dict[str, float]:
-    """Metricas de un conjunto completo, siempre en modo eval (dropout apagado)."""
+    """Metricas de un conjunto completo, siempre en modo eval (dropout apagado).
+
+    "class" es L_class sobre los puntos fijos `class_k` (0 si no se dan o si
+    lambda_class = 0). "total" es lambda_traj L_traj + lambda_par L_par, y suma
+    lambda_class L_class solo si `config.early_stopping_class` (ver `train`).
+    """
     was_training = symbol.net.training
     symbol.net.eval()
 
@@ -36,12 +46,21 @@ def evaluate_split(
     par = torch.mean(violation**2) if violation.numel() else torch.zeros_like(traj)
     max_ratio = ratio.max() if ratio.numel() else torch.zeros_like(traj)
     par_violation = (ratio > 1.0).to(traj.dtype).mean() if ratio.numel() else torch.zeros_like(traj)
+    if class_k is not None and config.lambda_class:
+        cls = class_loss(symbol, class_k, config.class_C)
+    else:
+        cls = torch.zeros_like(traj)
+
+    total = config.lambda_trajectory * traj + config.lambda_parabolicity * par
+    if config.early_stopping_class:
+        total = total + config.lambda_class * cls
 
     symbol.net.train(was_training)
     return {
-        "total": float(config.lambda_trajectory * traj + config.lambda_parabolicity * par),
+        "total": float(total),
         "trajectory": float(traj),
         "parabolicity": float(par),
+        "class": float(cls),
         "rel_l2": float(rel_l2),
         "par_max_ratio": float(max_ratio),
         "par_violation": float(par_violation),
@@ -49,7 +68,7 @@ def evaluate_split(
 
 
 @torch.no_grad()
-def trajectory_report(symbol: MLPSymbol, data: Split) -> Dict[str, float]:
+def trajectory_report(symbol: LearnedSymbol, data: Split) -> Dict[str, float]:
     """Metricas de regresion de la trayectoria sobre un conjunto completo.
 
     La prediccion es compleja, asi que el error de cada muestra es el modulo del
@@ -78,7 +97,7 @@ def trajectory_report(symbol: MLPSymbol, data: Split) -> Dict[str, float]:
     }
 
 
-def symbol_report(symbol: MLPSymbol, reference: Symbol, k_values) -> Dict[str, float]:
+def symbol_report(symbol: LearnedSymbol, reference: Symbol, k_values) -> Dict[str, float]:
     """Metricas de a_theta(k) frente al simbolo de referencia sobre una rejilla."""
     k = np.asarray(k_values, dtype=float).reshape(-1, symbol.n)
     a_ref = np.array([reference(row)[0, 0] for row in k])

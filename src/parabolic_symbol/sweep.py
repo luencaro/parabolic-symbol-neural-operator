@@ -1,7 +1,13 @@
 """Barrido de hiperparametros (kappa, profundidad, ancho, dropout, weight decay).
 
-kappa no se fija a mano: se barre una lista de valores y se entrena una red por
-combinacion; `best_run` elige entre las que cumplen la cota.
+Con MLPSymbol (`symbol_type="mlp"`) kappa no se fija a mano: se barre una lista
+de valores y se entrena una red por combinacion; `best_run` elige entre las que
+cumplen la cota.
+
+Con ParabolicMLPSymbol (`symbol_type="parabolic"`) kappa NO se barre: la Def. 2.3
+se cumple por construccion con kappa = theoretical_kappa(omega), y ese es el
+kappa de L_par y de la comprobacion. Se siguen barriendo profundidad, ancho,
+dropout y weight decay.
 """
 from __future__ import annotations
 
@@ -19,8 +25,12 @@ from .symbols.mlp_symbol import (
     default_device,
     dropout_layer_indices,
 )
+from .symbols.parabolic_mlp_symbol import ParabolicMLPSymbol
 from .training import METRICS, TrainingConfig, TrainingResult, train
-from .utils import PhasePoints, Split
+from .utils import LearnedSymbol, PhasePoints, Split
+
+# Que simbolo entrena el barrido.
+SYMBOL_TYPES = ("mlp", "parabolic")
 
 
 @dataclass
@@ -41,10 +51,11 @@ class SweepRun:
     val_rel_l2: float
     val_par_max_ratio: float
     val_par_violation: float
+    val_class: float
     best_epoch: int
     epochs_run: int
     seconds: float
-    symbol: MLPSymbol = field(repr=False)
+    symbol: LearnedSymbol = field(repr=False)
     result: TrainingResult = field(repr=False)
 
     @property
@@ -57,7 +68,7 @@ class SweepRun:
 
 
 @torch.no_grad()
-def max_ratio_on(symbol: MLPSymbol, phase: PhasePoints, omega: float, kappa: float) -> float:
+def max_ratio_on(symbol: LearnedSymbol, phase: PhasePoints, omega: float, kappa: float) -> float:
     """Peor ratio del simbolo sobre un conjunto fijo de puntos (k, lambda)."""
     _, ratio = parabolicity_terms(symbol, *phase, omega, kappa)
     return float(ratio.max()) if ratio.numel() else 0.0
@@ -68,7 +79,7 @@ def run_sweep(
     val_data: Split,
     n: int,
     m: float,
-    kappas: Sequence[float],
+    kappas: Optional[Sequence[float]],
     depths: Sequence[int],
     widths: Sequence[int],
     base_config: TrainingConfig,
@@ -81,6 +92,8 @@ def run_sweep(
     device: Optional[torch.device] = None,
     dtype: torch.dtype = torch.float64,
     verbose: bool = True,
+    symbol_type: str = "mlp",
+    bounds: Optional[Tuple[float, float]] = None,
 ) -> List[SweepRun]:
     """Entrena una red por cada (kappa, profundidad, ancho, ubicacion, weight_decay).
 
@@ -89,7 +102,26 @@ def run_sweep(
 
     La tasa de dropout `dropout` es fija; el eje que se barre es
     `dropout_layers`, donde se coloca ese dropout.
+
+    `symbol_type="parabolic"` entrena ParabolicMLPSymbol con la banda
+    `bounds = (c, C)` (obligatoria). Entonces `kappas` debe ser None: cada
+    corrida usa kappa = symbol.theoretical_kappa(base_config.omega), y
+    `input_scale` / `output_scale` no se usan (la escala la da <k>^m).
     """
+    if symbol_type not in SYMBOL_TYPES:
+        raise ValueError(f"symbol_type desconocido {symbol_type!r}; usar uno de {SYMBOL_TYPES}")
+    if symbol_type == "parabolic":
+        if bounds is None:
+            raise ValueError("symbol_type='parabolic' necesita bounds=(c, C)")
+        if kappas is not None:
+            raise ValueError(
+                "con symbol_type='parabolic' kappa no se barre (es theoretical_kappa): "
+                "pasar kappas=None"
+            )
+        kappas = (None,)
+    elif kappas is None:
+        raise ValueError("con symbol_type='mlp' hace falta la malla de kappas")
+
     device = device if device is not None else default_device()
     runs: List[SweepRun] = []
 
@@ -109,13 +141,21 @@ def run_sweep(
 
     total = len(combos)
     for i, (kappa, n_layers, width, placement, indices, weight_decay) in enumerate(combos, 1):
+        if symbol_type == "parabolic":
+            symbol = ParabolicMLPSymbol(
+                n=n, m=m, c=bounds[0], C=bounds[1], hidden=(width,) * n_layers,
+                dropout=dropout, dropout_layers=indices,
+                seed=base_config.seed, device=device, dtype=dtype,
+            )
+            kappa = symbol.theoretical_kappa(base_config.omega)
+        else:
+            symbol = MLPSymbol(
+                n=n, m=m, hidden=(width,) * n_layers,
+                dropout=dropout, dropout_layers=indices,
+                input_scale=input_scale, output_scale=output_scale,
+                seed=base_config.seed, device=device, dtype=dtype,
+            )
         config = replace(base_config, kappa=kappa, weight_decay=weight_decay)
-        symbol = MLPSymbol(
-            n=n, m=m, hidden=(width,) * n_layers,
-            dropout=dropout, dropout_layers=indices,
-            input_scale=input_scale, output_scale=output_scale,
-            seed=base_config.seed, device=device, dtype=dtype,
-        )
 
         start = time.perf_counter()
         result = train(symbol, train_data, val_data, config)
@@ -139,6 +179,7 @@ def run_sweep(
             val_rel_l2=val["rel_l2"],
             val_par_max_ratio=val["par_max_ratio"],
             val_par_violation=val["par_violation"],
+            val_class=val["class"],
             best_epoch=result.best_epoch,
             epochs_run=result.epochs_run,
             seconds=seconds,
@@ -195,6 +236,7 @@ def sweep_table(runs: Sequence[SweepRun]):
                 "val_rel_l2": run.val_rel_l2,
                 "val_par_max_ratio": run.val_par_max_ratio,
                 "val_par_violation": run.val_par_violation,
+                "val_class": run.val_class,
                 "mejor_epoca": run.best_epoch,
                 "epocas": run.epochs_run,
                 "segundos": run.seconds,
