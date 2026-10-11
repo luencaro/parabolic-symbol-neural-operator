@@ -5,7 +5,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..Symbol import Symbol
+from ..symbol import Symbol
 
 
 class FractionalLaplacianSymbol(Symbol):

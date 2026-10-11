@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..Symbol import Symbol
+from ..symbol import Symbol
 
 class SlowDecaySymbol(Symbol):
     """a(k) = |k| (crecimiento lineal), pero declara m = 4.

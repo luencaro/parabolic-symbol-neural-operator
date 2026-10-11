@@ -6,8 +6,8 @@ from typing import Optional, Sequence, Tuple
 import numpy as np
 import torch
 
-from .Symbol import Symbol
-from .utils import PhasePoints, Split, complex_dtype
+from ..symbol import Symbol
+from ..utils import PhasePoints, Split, complex_dtype
 
 
 def k_grid(n: int, k_max: int) -> np.ndarray:

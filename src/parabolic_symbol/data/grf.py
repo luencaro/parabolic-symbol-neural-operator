@@ -30,9 +30,9 @@ from typing import Sequence, Tuple
 import numpy as np
 import torch
 
-from .Symbol import Symbol
-from .estimation import KWindow, k_window, symbol_values
-from .utils import LearnedSymbol, Split
+from ..symbol import Symbol
+from ..learning.estimation import KWindow, k_window, symbol_values
+from ..utils import LearnedSymbol, Split
 
 # Rejillas temporales del paper: 10 tiempos de entrenamiento, 20 de prueba.
 TRAIN_TIMES = 0.05 + 0.1 * np.arange(10)

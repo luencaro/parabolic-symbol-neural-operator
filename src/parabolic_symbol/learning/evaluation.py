@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING, Dict, Optional
 import numpy as np
 import torch
 
-from .Symbol import Symbol
-from .data import to_device
+from ..symbol import Symbol
+from ..data.synthetic import to_device
 from .losses import class_loss, parabolicity_terms
-from .utils import LearnedSymbol, PhasePoints, Split
+from ..utils import LearnedSymbol, PhasePoints, Split
 
 if TYPE_CHECKING:  # solo para anotar: en runtime seria el ciclo training <-> evaluation
     from .training import TrainingConfig
@@ -42,7 +42,8 @@ def evaluate_split(
     traj = sq_error / residual.numel()
     rel_l2 = torch.sqrt(sq_error / torch.sum(torch.abs(data["u_ref"]) ** 2))
 
-    violation, ratio = parabolicity_terms(symbol, *phase, config.omega, config.kappa)
+    kappa = symbol.theoretical_kappa(config.omega)
+    violation, ratio = parabolicity_terms(symbol, *phase, config.omega, kappa)
     par = torch.mean(violation**2) if violation.numel() else torch.zeros_like(traj)
     max_ratio = ratio.max() if ratio.numel() else torch.zeros_like(traj)
     par_violation = (ratio > 1.0).to(traj.dtype).mean() if ratio.numel() else torch.zeros_like(traj)
@@ -65,6 +66,13 @@ def evaluate_split(
         "par_max_ratio": float(max_ratio),
         "par_violation": float(par_violation),
     }
+
+
+@torch.no_grad()
+def max_ratio_on(symbol: LearnedSymbol, phase: PhasePoints, omega: float, kappa: float) -> float:
+    """Peor ratio del simbolo sobre un conjunto fijo de puntos (k, lambda)."""
+    _, ratio = parabolicity_terms(symbol, *phase, omega, kappa)
+    return float(ratio.max()) if ratio.numel() else 0.0
 
 
 @torch.no_grad()

@@ -1,9 +1,9 @@
 """Simbolo aprendido parabolico por construccion: a_theta = <k>^m * (banda en (c, C)).
 
-MLPSymbol es una MLP con salida lineal, asi que a_theta(k) queda acotada y la
-parabolicidad (Def. 2.3), que exige |a_theta(k)| >= <k>^m / kappa -> infinito,
-solo puede cumplirse dentro de la ventana de entrenamiento. Aqui la escala la da
-<k>^m y la red solo aprende un factor acotado:
+Una MLP con salida lineal da un a_theta(k) acotado, y la parabolicidad
+(Def. 2.3), que exige |a_theta(k)| >= <k>^m / kappa -> infinito, solo podria
+cumplirse dentro de la ventana de entrenamiento. Aqui la escala la da <k>^m y la
+red solo aprende un factor acotado:
 
     x        = k / <k>,                 <k> = (1 + |k|^2)^{1/2}
     a_theta(k) = <k>^m * ( c + (C - c) * sigma(g_theta(x)) )     para k != 0
@@ -30,20 +30,14 @@ import numpy as np
 import torch
 from torch import nn
 
-from ..Symbol import Symbol
-from .mlp_symbol import (  # noqa: F401  (DROPOUT_PLACEMENTS se reexporta)
-    DROPOUT_PLACEMENTS,
-    DropoutPlacement,
-    default_device,
-    dropout_layer_indices,
-)
+from ..symbol import Symbol
+from ..utils import DropoutPlacement, default_device, dropout_layer_indices
 
 
 class ParabolicMLPSymbol(Symbol):
     """a_theta(k) = <k>^m (c + (C - c) sigma(g_theta(k/<k>))), con a_theta(0) = 0.
 
-    Misma interfaz que MLPSymbol (escalar real, dim = 1), salvo que no hay
-    input_scale ni output_scale: la escala la da <k>^m.
+    Simbolo escalar real (dim = 1); la escala la da <k>^m.
 
     Parameters
     n : int
@@ -141,8 +135,7 @@ class ParabolicMLPSymbol(Symbol):
     def decay_parameters(self):
         """Pesos que reciben weight decay: las Linear ocultas interiores.
 
-        Mismo criterio que MLPSymbol: se excluyen la Linear de entrada y la de
-        salida, y los sesgos no decaen.
+        Se excluyen la Linear de entrada y la de salida, y los sesgos no decaen.
         """
         return [layer.weight for layer in self.linear_layers()[1:-1]]
 

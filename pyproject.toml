@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "parabolic-symbol"
+version = "0.1.0"
+description = "Aprendizaje de simbolos parabolicos sobre el toro con ParabolicMLPSymbol"
+requires-python = ">=3.10"
+dependencies = ["numpy", "torch", "pandas"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

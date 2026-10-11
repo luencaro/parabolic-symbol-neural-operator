@@ -25,9 +25,9 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .Symbol import Symbol
-from .data import k_grid
-from .utils import multi_indices
+from ..symbol import Symbol
+from ..data.synthetic import k_grid
+from ..utils import bracket, multi_indices
 
 
 class SymbolClassResult(NamedTuple):
@@ -64,11 +64,6 @@ class SymbolClassVerifier:
     # ------------------------------------------------------------------
     # Evaluacion de a(k) y de sus diferencias
     # ------------------------------------------------------------------
-    @staticmethod
-    def bracket(k_values: np.ndarray) -> np.ndarray:
-        """<k> = (1 + |k|^2)^{1/2}, para un lote de k de forma (N, n)."""
-        return np.sqrt(1.0 + np.sum(np.asarray(k_values, dtype=float) ** 2, axis=1))
-
     def multi_indices(self, rho: Optional[int] = None) -> List[Tuple[int, ...]]:
         """Todos los alpha in N_0^n con |alpha| <= rho (por defecto symbol.rho)."""
         return multi_indices(self.symbol.n, self.symbol.rho if rho is None else rho)
@@ -112,7 +107,7 @@ class SymbolClassVerifier:
         """<k>^{|alpha| - m} ||Delta^alpha a(k)||: el cociente que debe estar acotado."""
         order = sum(int(a) for a in alpha)
         normas = self.norms(self.difference(k_values, alpha))
-        return self.bracket(k_values) ** (order - self.symbol.m) * normas
+        return bracket(k_values) ** (order - self.symbol.m) * normas
 
     # ------------------------------------------------------------------
     # Constantes, estabilidad y pendiente
@@ -149,7 +144,7 @@ class SymbolClassVerifier:
         k_values = k_grid(self.symbol.n, k_max)
         radios = np.max(np.abs(k_values), axis=1)
         normas = self.norms(self.difference(k_values, alpha))
-        corchetes = self.bracket(k_values)
+        corchetes = bracket(k_values)
 
         xs: List[float] = []
         ys: List[float] = []

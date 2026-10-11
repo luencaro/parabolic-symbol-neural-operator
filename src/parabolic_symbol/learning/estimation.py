@@ -23,10 +23,10 @@ from typing import Dict, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 
-from .Symbol import Symbol
-from .SymbolClassVerifier import SymbolClassVerifier
-from .data import k_grid
-from .utils import Split, multi_indices
+from ..symbol import Symbol
+from ..verification.symbol_class import SymbolClassVerifier
+from ..data.synthetic import k_grid
+from ..utils import Split, bracket, multi_indices
 
 ClassConstantsDict = Dict[Tuple[int, ...], float]
 
@@ -67,11 +67,6 @@ def k_window(k: np.ndarray) -> KWindow:
         norm_min=float(norms.min()) if len(k) else float("nan"),
         norm_max=float(norms.max()) if len(k) else float("nan"),
     )
-
-
-def bracket(k: np.ndarray) -> np.ndarray:
-    """<k> = (1 + |k|^2)^{1/2}, para un lote de k de forma (N, n)."""
-    return np.sqrt(1.0 + np.sum(np.asarray(k, dtype=float) ** 2, axis=1))
 
 
 # ----------------------------------------------------------------------

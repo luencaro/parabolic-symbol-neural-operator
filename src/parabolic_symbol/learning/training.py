@@ -4,8 +4,10 @@ Perdida total:
     L = lambda_trajectory * L_traj + lambda_parabolicity * L_par
         + lambda_class * L_class
 
-Los terminos estan en `losses.py`, los datos en `data.py` y las metricas en
-`evaluation.py`. El barrido que elige kappa y arquitectura esta en `sweep.py`.
+con kappa = symbol.theoretical_kappa(omega): la Def. 2.3 se cumple por
+construccion con ese kappa, asi que no es un hiperparametro. Los terminos estan
+en `losses.py`, los datos en `data/` y las metricas en `evaluation.py`. El
+barrido de arquitecturas esta en `sweep.py`.
 """
 from __future__ import annotations
 
@@ -15,17 +17,18 @@ from typing import Dict, List, Optional
 
 import torch
 
-from .Symbol import Symbol
-from .data import sample_k_points, sample_phase_points, to_device
+from ..symbol import Symbol
+from ..data.synthetic import sample_k_points, sample_phase_points, to_device
 from .estimation import resolve_class_constants
 from .evaluation import METRICS, evaluate_split
 from .losses import ClassConstants, class_loss, parabolicity_loss, trajectory_loss
-from .utils import LearnedSymbol, Split
+from ..utils import LearnedSymbol, Split
 
 
 @dataclass
 class TrainingConfig:
-    """Hiperparametros de `train`.
+    """Hiperparametros de `train`. Los valores por defecto son la configuracion
+    base de los notebooks; solo `k_max` y `class_C` dependen de los datos.
 
     C_alpha de L_class (`class_C_source`):
       - "given"  (por defecto): se usa `class_C` tal cual, como antes;
@@ -41,10 +44,9 @@ class TrainingConfig:
     epochs: int = 300
     batch_size: int = 1024
     lr: float = 1e-3
-    lr_final: Optional[float] = None  # si se da, decae exponencialmente hasta este valor
+    lr_final: Optional[float] = 1e-5  # si se da, decae exponencialmente hasta este valor
     weight_decay: float = 0.0    # AdamW desacoplado, solo en las Linear ocultas interiores
     omega: float = 1.0
-    kappa: float = 3.0
     lambda_trajectory: float = 1.0
     lambda_parabolicity: float = 1.0
     lambda_class: float = 1.0    # peso de L_class (Def. 2.1); 0 lo apaga
@@ -52,7 +54,7 @@ class TrainingConfig:
     class_C_source: str = "given"  # "given" (class_C), "oracle" o "data"
     class_reference: Optional[Symbol] = None  # simbolo exacto, solo para "oracle"
     class_margin: float = 1.5    # margen sobre las C_alpha de "oracle" / "data"
-    early_stopping_class: bool = False  # incluir L_class en la perdida del early stopping
+    early_stopping_class: bool = True  # incluir L_class en la perdida del early stopping
     k_max: int = 8               # ventana de k para los puntos de parabolicidad
     lam_min: float = 1e-2        # rango de |lambda| muestreado
     lam_max: float = 1e2
@@ -79,18 +81,18 @@ def train(
 ) -> TrainingResult:
     """Entrena a_theta con Adam y early stopping sobre la perdida de validacion.
 
-    Al terminar, los pesos del simbolo quedan en los de la mejor epoca. Sirve
-    para cualquier `LearnedSymbol` (MLPSymbol, ParabolicMLPSymbol).
+    Al terminar, los pesos del simbolo quedan en los de la mejor epoca. El kappa
+    de L_par es symbol.theoretical_kappa(config.omega).
 
     Early stopping. Con `lambda_class > 0` la perdida optimizada incluye
     L_class siempre. Lo que cambia `early_stopping_class` es el criterio:
-      - False (por defecto, el comportamiento original): el "total" de
+      - False: el "total" de
         validacion que se vigila es solo trayectoria + parabolicidad. L_class
         no tiene datos de validacion propios (sus k se muestrean de la misma
         ventana en ambos conjuntos), asi que no mide generalizacion; incluirla
         puede detener el entrenamiento por una mejora de regularidad que no se
         traduce en mejor trayectoria.
-      - True: el total incluye lambda_class * L_class, evaluada en un conjunto
+      - True (por defecto): el total incluye lambda_class * L_class, evaluada en un conjunto
         fijo de k. Util cuando importa que la mejor epoca tambien respete las
         C_alpha (p. ej. con C_alpha ajustadas sin mucho margen).
     En ambos casos L_class de validacion se registra en history["val"]["class"].
@@ -102,6 +104,7 @@ def train(
     config = replace(config, class_C=class_C, class_C_source="given")
 
     device, dtype = symbol.device, symbol.dtype
+    kappa = symbol.theoretical_kappa(config.omega)
     train_data = to_device(train_data, device, dtype)
     val_data = to_device(val_data, device, dtype)
 
@@ -176,7 +179,7 @@ def train(
                 symbol.n, config.k_max, len(idx), config.lam_min, config.lam_max,
                 gen, device, dtype,
             )
-            l_par = parabolicity_loss(symbol, k_p, lam_p, config.omega, config.kappa)
+            l_par = parabolicity_loss(symbol, k_p, lam_p, config.omega, kappa)
 
             loss = config.lambda_trajectory * l_traj + config.lambda_parabolicity * l_par
 

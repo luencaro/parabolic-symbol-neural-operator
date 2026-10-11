@@ -14,7 +14,7 @@ from typing import Dict, Sequence, Tuple, Union
 
 import torch
 
-from .utils import LearnedSymbol, multi_indices
+from ..utils import LearnedSymbol, multi_indices
 
 # C_alpha de la Def. 2.1: un escalar para todos los alpha, o uno por multiindice.
 ClassConstants = Union[float, Dict[Tuple[int, ...], float]]
