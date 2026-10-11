@@ -12,6 +12,8 @@ simbolo |k|^2.
 
   xi_k normal compleja estandar con xi_{-k} = conj(xi_k) (y real en k = 0 y en
   Nyquist), asi que u_hat0(k) = sigma_k xi_k / sqrt(2 pi).
+  `sample_grf_nd` muestrea el mismo campo en T^n (rfftn / irfftn); los
+  conjuntos de entrenamiento siguen siendo 1D.
 - Solucion exacta: u_hat(t, k) = exp(-t a(k)) u_hat0(k).
 - Mascara de recuperabilidad: se descartan los pares (k, t) con
   exp(-t a(k)) <= eps del dtype de entrenamiento, porque ahi u_hat(t, k) cae por
@@ -82,6 +84,52 @@ def sample_grf(
     # u0(x_j) = sum_k u_hat(k) e^{i k x_j} = resolution * irfft(u_hat)
     u0 = resolution * np.fft.irfft(sigma * xi, n=resolution, axis=-1)
     return u0, np.fft.fft(u0, axis=-1) / resolution
+
+
+def grf_wavenumbers(resolution: int, n: int) -> np.ndarray:
+    """Frecuencias enteras k in Z^n en el layout de np.fft.rfftn.
+
+    Forma (resolution,) * (n - 1) + (resolution // 2 + 1, n): los primeros n - 1
+    ejes van en el orden de np.fft.fftfreq y el ultimo es 0..Nyquist.
+    """
+    axes = [np.rint(np.fft.fftfreq(resolution, d=1.0 / resolution))] * (n - 1)
+    axes.append(np.arange(resolution // 2 + 1, dtype=float))
+    return np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
+
+
+def sample_grf_nd(
+    n_samples: int,
+    resolution: int,
+    n: int,
+    rng: np.random.Generator,
+    tau: float = 7.0,
+    alpha: float = 2.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Muestras reales de u0 ~ N(0, tau^4 (-Delta + tau^2)^{-alpha}) en T^n = [0, 2 pi)^n.
+
+    Malla x_j = 2 pi j / resolution en cada eje. Con autofunciones
+    e_k = e^{i k.x} / (2 pi)^{n/2}, u0_hat(k) = sigma_k xi_k / (2 pi)^{n/2}; en
+    n = 1 es la misma distribucion que `sample_grf` (no la misma muestra para
+    una semilla dada). xi sale de rfftn de ruido blanco real dividido por
+    resolution^{n/2}: asi E|xi_k|^2 = 1 y xi_{-k} = conj(xi_k), y u0 es real sin
+    imponer la simetria a mano.
+
+    Devuelve (u0, u0_hat): u0 de forma (n_samples,) + (resolution,) * n y
+    u0_hat(k) = rfftn(u0) / resolution^n en el layout de `grf_wavenumbers`.
+    u(x) = sum_k u_hat(k) e^{i k.x} se recupera con
+    resolution^n * irfftn(u_hat, s=(resolution,) * n).
+    """
+    if resolution % 2:
+        raise ValueError(f"la resolucion debe ser par: {resolution}")
+    if n < 1:
+        raise ValueError(f"n debe ser >= 1: {n}")
+    shape = (resolution,) * n
+    axes = tuple(range(-n, 0))
+    xi = np.fft.rfftn(rng.standard_normal((n_samples,) + shape), axes=axes) / resolution ** (n / 2)
+    k_norm = np.linalg.norm(grf_wavenumbers(resolution, n), axis=-1)
+    u0_hat = np.sqrt(grf_variance(k_norm, tau, alpha)) / (2.0 * np.pi) ** (n / 2) * xi
+    u0 = resolution**n * np.fft.irfftn(u0_hat, s=shape, axes=axes)
+    return u0, u0_hat
 
 
 def make_grf_heat_data(
