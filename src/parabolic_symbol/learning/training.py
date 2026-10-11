@@ -4,37 +4,57 @@ Perdida total:
     L = lambda_trajectory * L_traj + lambda_parabolicity * L_par
         + lambda_class * L_class
 
-Los terminos estan en `losses.py`, los datos en `data.py` y las metricas en
-`evaluation.py`. El barrido que elige kappa y arquitectura esta en `sweep.py`.
+con kappa = symbol.theoretical_kappa(omega): la Def. 2.3 se cumple por
+construccion con ese kappa, asi que no es un hiperparametro. Los terminos estan
+en `losses.py`, los datos en `data/` y las metricas en `evaluation.py`. El
+barrido de arquitecturas esta en `sweep.py`.
 """
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional
 
 import torch
 
-from .data import sample_k_points, sample_phase_points, to_device
+from ..symbol import Symbol
+from ..data.synthetic import sample_k_points, sample_phase_points, to_device
+from .estimation import resolve_class_constants
 from .evaluation import METRICS, evaluate_split
 from .losses import ClassConstants, class_loss, parabolicity_loss, trajectory_loss
-from .symbols.mlp_symbol import MLPSymbol
-from .utils import Split
+from ..utils import LearnedSymbol, Split
 
 
 @dataclass
 class TrainingConfig:
+    """Hiperparametros de `train`. Los valores por defecto son la configuracion
+    base de los notebooks; solo `k_max` y `class_C` dependen de los datos.
+
+    C_alpha de L_class (`class_C_source`):
+      - "given"  (por defecto): se usa `class_C` tal cual, como antes;
+      - "oracle": se calculan con el simbolo exacto `class_reference` en
+                  |k_i| <= k_max, con margen `class_margin`;
+      - "data":   se calculan por diferencias finitas de a_hat (estimado de
+                  `train_data`, nunca de validacion), con margen `class_margin`.
+
+    `early_stopping_class` decide si L_class entra en la perdida de validacion
+    que vigila el early stopping (ver `train`).
+    """
+
     epochs: int = 300
     batch_size: int = 1024
     lr: float = 1e-3
-    lr_final: Optional[float] = None  # si se da, decae exponencialmente hasta este valor
+    lr_final: Optional[float] = 1e-5  # si se da, decae exponencialmente hasta este valor
     weight_decay: float = 0.0    # AdamW desacoplado, solo en las Linear ocultas interiores
     omega: float = 1.0
-    kappa: float = 3.0
     lambda_trajectory: float = 1.0
     lambda_parabolicity: float = 1.0
     lambda_class: float = 1.0    # peso de L_class (Def. 2.1); 0 lo apaga
     class_C: ClassConstants = 1.0  # C_alpha: un escalar, o {alpha: C_alpha}
+    class_C_source: str = "given"  # "given" (class_C), "oracle" o "data"
+    class_reference: Optional[Symbol] = None  # simbolo exacto, solo para "oracle"
+    class_margin: float = 1.5    # margen sobre las C_alpha de "oracle" / "data"
+    early_stopping_class: bool = True  # incluir L_class en la perdida del early stopping
     k_max: int = 8               # ventana de k para los puntos de parabolicidad
     lam_min: float = 1e-2        # rango de |lambda| muestreado
     lam_max: float = 1e2
@@ -53,20 +73,38 @@ class TrainingResult:
     best_val_total: float
     epochs_run: int
     stopped_early: bool
+    class_C: Optional[ClassConstants] = None  # C_alpha que uso L_class (ya resueltas)
 
 
 def train(
-    symbol: MLPSymbol, train_data: Split, val_data: Split, config: TrainingConfig
+    symbol: LearnedSymbol, train_data: Split, val_data: Split, config: TrainingConfig
 ) -> TrainingResult:
     """Entrena a_theta con Adam y early stopping sobre la perdida de validacion.
 
-    Al terminar, los pesos del simbolo quedan en los de la mejor epoca.
+    Al terminar, los pesos del simbolo quedan en los de la mejor epoca. El kappa
+    de L_par es symbol.theoretical_kappa(config.omega).
 
-    Con `lambda_class > 0` la perdida optimizada incluye L_class, pero las
-    metricas de `evaluate_split` (y con ellas el "total" del early stopping)
-    siguen siendo solo trayectoria + parabolicidad.
+    Early stopping. Con `lambda_class > 0` la perdida optimizada incluye
+    L_class siempre. Lo que cambia `early_stopping_class` es el criterio:
+      - False: el "total" de
+        validacion que se vigila es solo trayectoria + parabolicidad. L_class
+        no tiene datos de validacion propios (sus k se muestrean de la misma
+        ventana en ambos conjuntos), asi que no mide generalizacion; incluirla
+        puede detener el entrenamiento por una mejora de regularidad que no se
+        traduce en mejor trayectoria.
+      - True (por defecto): el total incluye lambda_class * L_class, evaluada en un conjunto
+        fijo de k. Util cuando importa que la mejor epoca tambien respete las
+        C_alpha (p. ej. con C_alpha ajustadas sin mucho margen).
+    En ambos casos L_class de validacion se registra en history["val"]["class"].
     """
+    class_C = resolve_class_constants(
+        config.class_C_source, config.class_C, train_data, symbol.m, symbol.rho,
+        config.k_max, config.class_reference, config.class_margin,
+    )
+    config = replace(config, class_C=class_C, class_C_source="given")
+
     device, dtype = symbol.device, symbol.dtype
+    kappa = symbol.theoretical_kappa(config.omega)
     train_data = to_device(train_data, device, dtype)
     val_data = to_device(val_data, device, dtype)
 
@@ -98,6 +136,14 @@ def train(
             symbol.n, config.k_max, config.n_phase_eval, config.lam_min, config.lam_max,
             torch.Generator().manual_seed(config.seed + 202), device, dtype,
         ),
+    }
+    # Igual para L_class: k fijos por conjunto (solo si el termino esta activo).
+    class_eval = {
+        name: sample_k_points(
+            symbol.n, config.k_max, config.n_phase_eval,
+            torch.Generator().manual_seed(config.seed + offset), device, dtype,
+        ) if config.lambda_class else None
+        for name, offset in (("train", 303), ("val", 404))
     }
     splits = {"train": train_data, "val": val_data}
 
@@ -133,7 +179,7 @@ def train(
                 symbol.n, config.k_max, len(idx), config.lam_min, config.lam_max,
                 gen, device, dtype,
             )
-            l_par = parabolicity_loss(symbol, k_p, lam_p, config.omega, config.kappa)
+            l_par = parabolicity_loss(symbol, k_p, lam_p, config.omega, kappa)
 
             loss = config.lambda_trajectory * l_traj + config.lambda_parabolicity * l_par
 
@@ -153,7 +199,7 @@ def train(
             scheduler.step()
 
         for name, split in splits.items():
-            metrics = evaluate_split(symbol, split, phase_eval[name], config)
+            metrics = evaluate_split(symbol, split, phase_eval[name], config, class_eval[name])
             for key in METRICS:
                 history[name][key].append(metrics[key])
 
@@ -167,6 +213,7 @@ def train(
             print(
                 f"epoca {epoch:4d} | val: total={val['total']:.3e} "
                 f"traj={val['trajectory']:.3e} par={val['parabolicity']:.3e} "
+                f"class={val['class']:.3e} "
                 f"rel_l2={val['rel_l2']:.4f} max_ratio={val['par_max_ratio']:.3f} "
                 f"viol={100 * val['par_violation']:5.2f}%"
             )
@@ -185,4 +232,5 @@ def train(
         best_val_total=best_val,
         epochs_run=epochs_run,
         stopped_early=stopped_early,
+        class_C=class_C,
     )

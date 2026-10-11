@@ -1,13 +1,14 @@
 version: 1
 
 project:
-  title: Verificacion de simbolos parabolicos
-  description: Exploracion numerica de simbolos parabolicos.
+  title: Simbolos parabolicos aprendidos con ParabolicMLPSymbol
+  description: Aprendizaje del simbolo de un generador parabolico sobre el toro, con parabolicidad y clase S^{m,rho} garantizadas por construccion.
   authors:
-    - name: Parabolic Symbol Verification
+    - name: "<TU NOMBRE>"
   toc:
-    - file: ../notebooks/exploration.ipynb
-    - file: ../notebooks/mlp_symbol_training.ipynb
+    - file: ../notebooks/01_verificadores.ipynb
+    - file: ../notebooks/02_barrido.ipynb
+    - file: ../notebooks/03_barrido_grf.ipynb
 
 site:
   template: book-theme

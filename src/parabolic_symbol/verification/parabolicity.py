@@ -13,7 +13,7 @@ from typing import Iterable, List, NamedTuple
 
 import numpy as np
 
-from .Symbol import Symbol
+from ..symbol import Symbol
 
 
 class ParabolicityResult(NamedTuple):

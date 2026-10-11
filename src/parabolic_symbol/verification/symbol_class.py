@@ -25,9 +25,9 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .Symbol import Symbol
-from .data import k_grid
-from .utils import multi_indices
+from ..symbol import Symbol
+from ..data.synthetic import k_grid
+from ..utils import bracket, multi_indices
 
 
 class SymbolClassResult(NamedTuple):
@@ -64,11 +64,6 @@ class SymbolClassVerifier:
     # ------------------------------------------------------------------
     # Evaluacion de a(k) y de sus diferencias
     # ------------------------------------------------------------------
-    @staticmethod
-    def bracket(k_values: np.ndarray) -> np.ndarray:
-        """<k> = (1 + |k|^2)^{1/2}, para un lote de k de forma (N, n)."""
-        return np.sqrt(1.0 + np.sum(np.asarray(k_values, dtype=float) ** 2, axis=1))
-
     def multi_indices(self, rho: Optional[int] = None) -> List[Tuple[int, ...]]:
         """Todos los alpha in N_0^n con |alpha| <= rho (por defecto symbol.rho)."""
         return multi_indices(self.symbol.n, self.symbol.rho if rho is None else rho)
@@ -112,7 +107,7 @@ class SymbolClassVerifier:
         """<k>^{|alpha| - m} ||Delta^alpha a(k)||: el cociente que debe estar acotado."""
         order = sum(int(a) for a in alpha)
         normas = self.norms(self.difference(k_values, alpha))
-        return self.bracket(k_values) ** (order - self.symbol.m) * normas
+        return bracket(k_values) ** (order - self.symbol.m) * normas
 
     # ------------------------------------------------------------------
     # Constantes, estabilidad y pendiente
@@ -149,7 +144,7 @@ class SymbolClassVerifier:
         k_values = k_grid(self.symbol.n, k_max)
         radios = np.max(np.abs(k_values), axis=1)
         normas = self.norms(self.difference(k_values, alpha))
-        corchetes = self.bracket(k_values)
+        corchetes = bracket(k_values)
 
         xs: List[float] = []
         ys: List[float] = []
@@ -171,6 +166,7 @@ class SymbolClassVerifier:
         k_maxs: Sequence[int] = (4, 8, 12, 16),
         tol_slope: float = 0.25,
         tol_stable: float = 0.05,
+        atol: float = 1e-8,
     ) -> List[SymbolClassResult]:
         """Evidencia de pertenencia a S^{m,rho}, un resultado por multiindice.
 
@@ -178,6 +174,11 @@ class SymbolClassVerifier:
         se estabiliza (hacen falta al menos dos). `tol_stable` es el crecimiento
         relativo maximo admitido entre las dos ultimas ventanas y `tol_slope` el
         margen que se le da a la pendiente log-log por encima de m - |alpha|.
+
+        Todo C_alpha_hat(K) por debajo de `atol` se toma como 0: es ruido de
+        redondeo de una diferencia que deberia anularse (p. ej. |k|^2 calculado
+        como (|k|^2)^{1/2} elevado a 2). Sin el umbral, el crecimiento relativo de
+        ese ruido (1e-13 -> 1e-11) marcaria el multiindice como inestable.
 
         El criterio es de una sola cola: la definicion pide una COTA superior, asi
         que una pendiente menor que m - |alpha| (el simbolo es de orden mas bajo
@@ -191,7 +192,10 @@ class SymbolClassVerifier:
 
         resultados: List[SymbolClassResult] = []
         for alpha in self.multi_indices():
-            c_hat = self.constants(alpha, k_maxs)
+            c_hat = {
+                k_max: (c if c >= atol else 0.0)
+                for k_max, c in self.constants(alpha, k_maxs).items()
+            }
             ultima, previa = c_hat[k_maxs[-1]], c_hat[k_maxs[-2]]
             if previa > 0.0:
                 growth = ultima / previa
@@ -200,7 +204,8 @@ class SymbolClassVerifier:
             stable = growth <= 1.0 + tol_stable
 
             order = sum(alpha)
-            slope = self.log_log_slope(alpha, k_maxs[-1])
+            # Si C_alpha_hat es 0 (salvo redondeo) la pendiente del ruido no dice nada
+            slope = self.log_log_slope(alpha, k_maxs[-1]) if ultima > 0.0 else float("nan")
             slope_theoretical = self.symbol.m - order
             consistent = stable and (
                 np.isnan(slope) or slope <= slope_theoretical + tol_slope

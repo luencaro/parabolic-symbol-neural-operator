@@ -14,14 +14,13 @@ from typing import Dict, Sequence, Tuple, Union
 
 import torch
 
-from .symbols.mlp_symbol import MLPSymbol
-from .utils import multi_indices
+from ..utils import LearnedSymbol, multi_indices
 
 # C_alpha de la Def. 2.1: un escalar para todos los alpha, o uno por multiindice.
 ClassConstants = Union[float, Dict[Tuple[int, ...], float]]
 
 
-def trajectory_loss(symbol: MLPSymbol, k, t, u0, u_ref) -> torch.Tensor:
+def trajectory_loss(symbol: LearnedSymbol, k, t, u0, u_ref) -> torch.Tensor:
     """MSE complejo: E[|exp(-t a_theta(k)) u0 - u_ref|^2]."""
     u_pred = torch.exp(-t * symbol.forward(k)) * u0
     return torch.mean(torch.abs(u_pred - u_ref) ** 2)
@@ -33,7 +32,7 @@ def phase_space_norm(k: torch.Tensor, lam: torch.Tensor, m: float) -> torch.Tens
 
 
 def parabolicity_terms(
-    symbol: MLPSymbol, k, lam, omega: float, kappa: float
+    symbol: LearnedSymbol, k, lam, omega: float, kappa: float
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Devuelve (violacion, ratio) en los puntos dentro del dominio de la Def. 2.3.
 
@@ -54,7 +53,7 @@ def parabolicity_terms(
 
 
 def parabolicity_loss(
-    symbol: MLPSymbol, k, lam, omega: float, kappa: float
+    symbol: LearnedSymbol, k, lam, omega: float, kappa: float
 ) -> torch.Tensor:
     """Hinge al cuadrado sobre la desigualdad de parabolicidad (Def. 2.3)."""
     violation, _ = parabolicity_terms(symbol, k, lam, omega, kappa)
@@ -76,7 +75,7 @@ def class_constants(
 
 
 def class_terms(
-    symbol: MLPSymbol, k, C: ClassConstants
+    symbol: LearnedSymbol, k, C: ClassConstants
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Devuelve (violacion, ratio) de la cota de la Def. 2.1, por alpha y por muestra.
 
@@ -114,7 +113,7 @@ def class_terms(
     return torch.stack(violacion), torch.stack(ratio)
 
 
-def class_loss(symbol: MLPSymbol, k, C: ClassConstants) -> torch.Tensor:
+def class_loss(symbol: LearnedSymbol, k, C: ClassConstants) -> torch.Tensor:
     """Hinge al cuadrado sobre la cota de la Def. 2.1.
 
     L_class = E[ max(0, <k>^{|alpha| - m} |Delta^alpha a_theta(k)| - C_alpha)^2 ],
