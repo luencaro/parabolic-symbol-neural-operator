@@ -9,7 +9,7 @@ donde |(k, lambda)| := (|k|^2 + |lambda|^{2/m})^{1/2}.
 """
 from __future__ import annotations
 
-from typing import Iterable, List, NamedTuple
+from typing import Iterable, List, NamedTuple, Sequence
 
 import numpy as np
 
@@ -126,4 +126,39 @@ class ParabolicityVerifier:
                 resolvent_norm = self.operator_norm(self.resolvent(k, lam))
                 candidate = resolvent_norm * (1.0 + phase_norm**2) ** (self.symbol.m / 2.0)
                 worst = max(worst, candidate)
+        return worst
+
+    def estimate_kappa_batch(
+        self,
+        k_values: np.ndarray,
+        lam_values: Sequence[complex],
+        omega: float,
+        chunk: int = 4096,
+    ) -> float:
+        """La misma kappa_hat que `estimate_kappa`, vectorizada, para simbolos escalares.
+
+        a(k) se evalua una sola vez por k (con `evaluate_batch` si existe) y se
+        combina con todos los lambda por trozos de `chunk` k. Sirve para rejillas
+        grandes (p. ej. 2D), donde el bucle punto a punto no es viable.
+        """
+        if self.symbol.dim != 1:
+            raise ValueError("estimate_kappa_batch solo vale para simbolos escalares (dim = 1)")
+        m = self.symbol.m
+        k_values = np.asarray(k_values, dtype=float).reshape(-1, self.symbol.n)
+        lam = np.asarray(lam_values, dtype=complex)
+        lam = lam[lam.real >= 0]
+        worst = 0.0
+        for start in range(0, len(k_values), chunk):
+            k = k_values[start : start + chunk]
+            if hasattr(self.symbol, "evaluate_batch"):
+                a = np.asarray(self.symbol.evaluate_batch(k), dtype=complex)
+            else:
+                a = np.array([self.symbol(row)[0, 0] for row in k], dtype=complex)
+            norm2 = np.sum(k**2, axis=1)[:, None] + np.abs(lam)[None, :] ** (2.0 / m)
+            valid = norm2 >= omega**2
+            if not valid.any():
+                continue
+            with np.errstate(divide="ignore"):  # a + lambda = 0 solo fuera del dominio (k = 0, lambda = 0)
+                candidate = (1.0 + norm2) ** (m / 2.0) / np.abs(a[:, None] + lam[None, :])
+            worst = max(worst, float(candidate[valid].max()))
         return worst

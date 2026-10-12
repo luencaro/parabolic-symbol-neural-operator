@@ -1,9 +1,9 @@
-"""Datos de la ecuacion del calor 1D al estilo del paper base (Sec. 5.1).
+"""Datos GRF al estilo del paper base (Sec. 5.1), para cualquier simbolo y cualquier n.
 
-Convencion del repo: toro [0, 2 pi), u(x) = sum_k u_hat(k) e^{i k x} y el
-generador tiene el simbolo de HeatSymbol, a(k) = |k|^2 (sin difusividad ni
-factores 4 pi^2). La misma convencion fija el campo aleatorio: -Delta tiene
-simbolo |k|^2.
+Convencion del repo: toro T^n = [0, 2 pi)^n, u(x) = sum_k u_hat(k) e^{i k.x} y
+el generador tiene el simbolo `reference`, p. ej. HeatSymbol, a(k) = |k|^2 (sin
+difusividad ni factores 4 pi^2), o FractionalLaplacianSymbol, a(k) = |k|^alpha.
+La misma convencion fija el campo aleatorio: -Delta tiene simbolo |k|^2.
 
 - u0 ~ N(0, 7^4 (-Delta + 7^2)^{-2.5}), real, muestreado espectralmente en una
   malla de `resolution` puntos: con autofunciones e_k = e^{ikx} / sqrt(2 pi),
@@ -12,12 +12,18 @@ simbolo |k|^2.
 
   xi_k normal compleja estandar con xi_{-k} = conj(xi_k) (y real en k = 0 y en
   Nyquist), asi que u_hat0(k) = sigma_k xi_k / sqrt(2 pi).
-  `sample_grf_nd` muestrea el mismo campo en T^n (rfftn / irfftn); los
-  conjuntos de entrenamiento siguen siendo 1D.
+  `sample_grf_nd` muestrea el mismo campo en T^n (rfftn / irfftn). En n = 1
+  los conjuntos salen de `sample_grf` (todos los k, orden de np.fft) y en
+  n >= 2 de `sample_grf_nd` (layout de `grf_wavenumbers`: medio espacio de k,
+  porque u_hat(-k) = conj(u_hat(k)) no da informacion nueva).
 - Solucion exacta: u_hat(t, k) = exp(-t a(k)) u_hat0(k).
 - Mascara de recuperabilidad: se descartan los pares (k, t) con
   exp(-t a(k)) <= eps del dtype de entrenamiento, porque ahi u_hat(t, k) cae por
   debajo de la precision de maquina respecto de u_hat0(k) y no informa sobre a(k).
+  Con `k_cap` se descartan ademas los k con |k|_inf > k_cap.
+- El exponente de la covarianza se llama `decay` (2.5 por defecto) para no
+  confundirlo con el alpha del laplaciano fraccionario; las funciones aceptan
+  todavia `alpha=` como nombre antiguo.
 
 `split` de cada conjunto tiene el mismo formato que `make_trajectory_data`
 (claves k, t, u0, u_ref; una fila por condicion inicial y par (k, t)
@@ -27,7 +33,7 @@ funcionan sin cambios.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -42,30 +48,65 @@ TEST_TIMES = 0.05 + 0.05 * np.arange(20)
 
 
 @dataclass
-class GRFHeatData:
-    """Un conjunto (entrenamiento o prueba) de trayectorias del calor."""
+class GRFData:
+    """Un conjunto (entrenamiento o prueba) de trayectorias de u_t + a(D) u = 0."""
 
     split: Split            # formato de train(...): solo pares recuperables
-    k: np.ndarray           # (N,) frecuencias enteras, orden de np.fft
+    k: np.ndarray           # (N, n) frecuencias enteras, en el layout de `spectral_shape`
     t: np.ndarray           # (T,)
     a: np.ndarray           # (N,) simbolo de referencia en k
     u0_hat: np.ndarray      # (n_ic, N) coeficientes de u0, todos los modos
-    mask: np.ndarray        # (T, N) pares (k, t) recuperables
+    mask: np.ndarray        # (T, N) pares (k, t) recuperables (y con |k|_inf <= k_cap)
     tol: float
     window: KWindow         # k que sobreviven a la mascara
+    resolution: int         # puntos de la malla por eje
 
     @property
-    def resolution(self) -> int:
-        return len(self.k)
+    def n(self) -> int:
+        return self.k.shape[1]
+
+    @property
+    def spectral_shape(self) -> Tuple[int, ...]:
+        """Forma de los coeficientes: (R,) en n = 1 (np.fft), layout de rfftn si n >= 2."""
+        if self.n == 1:
+            return (self.resolution,)
+        return (self.resolution,) * (self.n - 1) + (self.resolution // 2 + 1,)
+
+    def to_physical(self, u_hat: np.ndarray) -> np.ndarray:
+        """u(x_j) = sum_k u_hat(k) e^{i k.x_j} en la malla, para u_hat de forma (..., N)."""
+        u_hat = u_hat.reshape(u_hat.shape[:-1] + self.spectral_shape)
+        if self.n == 1:
+            return self.resolution * np.real(np.fft.ifft(u_hat, axis=-1))
+        shape = (self.resolution,) * self.n
+        axes = tuple(range(-self.n, 0))
+        return self.resolution**self.n * np.fft.irfftn(u_hat, s=shape, axes=axes)
 
 
-def grf_variance(k: np.ndarray, tau: float = 7.0, alpha: float = 2.5) -> np.ndarray:
-    """sigma_k^2 = tau^4 (|k|^2 + tau^2)^{-alpha}, autovalores de tau^4 (-Delta + tau^2)^{-alpha}."""
-    return tau**4 * (np.asarray(k, dtype=float) ** 2 + tau**2) ** (-alpha)
+# Nombre anterior, cuando los datos eran solo del calor 1D.
+GRFHeatData = GRFData
+
+
+def _decay(decay: float, alpha: Optional[float]) -> float:
+    """Compatibilidad: `alpha=` es el nombre antiguo de `decay`."""
+    return decay if alpha is None else alpha
+
+
+def grf_variance(
+    k: np.ndarray, tau: float = 7.0, decay: float = 2.5, *, alpha: Optional[float] = None
+) -> np.ndarray:
+    """sigma_k^2 = tau^4 (|k|^2 + tau^2)^{-decay}, autovalores de tau^4 (-Delta + tau^2)^{-decay}."""
+    decay = _decay(decay, alpha)
+    return tau**4 * (np.asarray(k, dtype=float) ** 2 + tau**2) ** (-decay)
 
 
 def sample_grf(
-    n_samples: int, resolution: int, rng: np.random.Generator, tau: float = 7.0, alpha: float = 2.5
+    n_samples: int,
+    resolution: int,
+    rng: np.random.Generator,
+    tau: float = 7.0,
+    decay: float = 2.5,
+    *,
+    alpha: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Muestras reales de u0 en la malla x_j = 2 pi j / resolution.
 
@@ -75,7 +116,7 @@ def sample_grf(
     if resolution % 2:
         raise ValueError(f"la resolucion debe ser par: {resolution}")
     k_half = np.arange(resolution // 2 + 1)            # 0..Nyquist (rfft)
-    sigma = np.sqrt(grf_variance(k_half, tau, alpha) / (2.0 * np.pi))
+    sigma = np.sqrt(grf_variance(k_half, tau, _decay(decay, alpha)) / (2.0 * np.pi))
     xi = (
         rng.standard_normal((n_samples, len(k_half)))
         + 1j * rng.standard_normal((n_samples, len(k_half)))
@@ -103,9 +144,11 @@ def sample_grf_nd(
     n: int,
     rng: np.random.Generator,
     tau: float = 7.0,
-    alpha: float = 2.5,
+    decay: float = 2.5,
+    *,
+    alpha: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Muestras reales de u0 ~ N(0, tau^4 (-Delta + tau^2)^{-alpha}) en T^n = [0, 2 pi)^n.
+    """Muestras reales de u0 ~ N(0, tau^4 (-Delta + tau^2)^{-decay}) en T^n = [0, 2 pi)^n.
 
     Malla x_j = 2 pi j / resolution en cada eje. Con autofunciones
     e_k = e^{i k.x} / (2 pi)^{n/2}, u0_hat(k) = sigma_k xi_k / (2 pi)^{n/2}; en
@@ -127,12 +170,12 @@ def sample_grf_nd(
     axes = tuple(range(-n, 0))
     xi = np.fft.rfftn(rng.standard_normal((n_samples,) + shape), axes=axes) / resolution ** (n / 2)
     k_norm = np.linalg.norm(grf_wavenumbers(resolution, n), axis=-1)
-    u0_hat = np.sqrt(grf_variance(k_norm, tau, alpha)) / (2.0 * np.pi) ** (n / 2) * xi
+    u0_hat = np.sqrt(grf_variance(k_norm, tau, _decay(decay, alpha))) / (2.0 * np.pi) ** (n / 2) * xi
     u0 = resolution**n * np.fft.irfftn(u0_hat, s=shape, axes=axes)
     return u0, u0_hat
 
 
-def make_grf_heat_data(
+def make_grf_data(
     reference: Symbol,
     n_ic: int,
     times: Sequence[float],
@@ -140,58 +183,80 @@ def make_grf_heat_data(
     dtype: torch.dtype = torch.float32,
     seed: int = 0,
     tau: float = 7.0,
-    alpha: float = 2.5,
+    decay: float = 2.5,
     verbose: bool = True,
-) -> GRFHeatData:
-    """n_ic condiciones iniciales GRF evolucionadas con el simbolo `reference` (n = 1).
+    k_cap: Optional[int] = None,
+    *,
+    alpha: Optional[float] = None,
+) -> GRFData:
+    """n_ic condiciones iniciales GRF en T^n evolucionadas con el simbolo `reference`.
 
-    `dtype` es la precision con la que se va a entrenar: fija la tolerancia
-    eps = finfo(dtype).eps de la mascara de recuperabilidad. Los tensores del
-    split se guardan en float64 / complex128, como en `make_trajectory_data`;
-    `train` los pasa al dtype del modelo.
+    n = reference.n. En n = 1 se usa `sample_grf` (todos los k, orden de np.fft);
+    en n >= 2, `sample_grf_nd` (layout de `grf_wavenumbers`). `dtype` es la
+    precision con la que se va a entrenar: fija la tolerancia
+    eps = finfo(dtype).eps de la mascara de recuperabilidad. `k_cap`, si se da,
+    descarta ademas los k con |k|_inf > k_cap. Los tensores del split se guardan
+    en float64 / complex128, como en `make_trajectory_data`, con k de forma
+    (filas, n); `train` los pasa al dtype del modelo.
     """
-    if reference.n != 1:
-        raise ValueError(f"los datos GRF son 1D: reference.n = {reference.n}")
+    n = reference.n
+    decay = _decay(decay, alpha)
     rng = np.random.default_rng(seed)
-    _, u0_hat = sample_grf(n_ic, resolution, rng, tau, alpha)
-    k = np.rint(np.fft.fftfreq(resolution, d=1.0 / resolution)).astype(int)
-    a = symbol_values(reference, k[:, None])
+    if n == 1:
+        _, u0_hat = sample_grf(n_ic, resolution, rng, tau, decay)
+        k = np.rint(np.fft.fftfreq(resolution, d=1.0 / resolution)).astype(int)[:, None]
+    else:
+        _, u0_hat = sample_grf_nd(n_ic, resolution, n, rng, tau, decay)
+        k = grf_wavenumbers(resolution, n).reshape(-1, n).astype(int)
+        u0_hat = u0_hat.reshape(n_ic, -1)
+    a = symbol_values(reference, k)
     t = np.asarray(times, dtype=float)
 
     tol = float(torch.finfo(dtype).eps)
     mask = np.exp(-t[:, None] * a[None, :]) > tol      # (T, N)
+    if k_cap is not None:
+        mask &= np.abs(k).max(axis=1) <= k_cap
     it, ik = np.nonzero(mask)                           # pares (t, k) recuperables
 
     t_rows = np.tile(t[it], n_ic)
-    k_rows = np.tile(k[ik], n_ic)
+    k_rows = np.tile(k[ik], (n_ic, 1))
     u0_rows = u0_hat[:, ik].reshape(-1)
     u_rows = np.exp(-t_rows * np.tile(a[ik], n_ic)) * u0_rows
     split = {
-        "k": torch.tensor(k_rows[:, None], dtype=torch.float64),
+        "k": torch.tensor(k_rows, dtype=torch.float64),
         "t": torch.tensor(t_rows, dtype=torch.float64),
         "u0": torch.tensor(u0_rows, dtype=torch.complex128),
         "u_ref": torch.tensor(u_rows, dtype=torch.complex128),
     }
-    window = k_window(np.unique(k[ik])[:, None])
+    window = k_window(np.unique(k[ik], axis=0))
 
     if verbose:
+        malla = "x".join([str(resolution)] * n)
+        cap = "" if k_cap is None else f", |k|_inf <= {k_cap}"
         print(
-            f"{n_ic} condiciones iniciales x {len(t)} tiempos, resolucion {resolution}: "
-            f"{len(it)} de {mask.size} pares (k, t) recuperables (eps={tol:.3g}) "
+            f"{n_ic} condiciones iniciales x {len(t)} tiempos, resolucion {malla}: "
+            f"{len(it)} de {mask.size} pares (k, t) recuperables (eps={tol:.3g}{cap}) "
             f"-> {split['k'].shape[0]:,} muestras"
         )
         print(f"  ventana de k recuperable: {window}")
-        k_t = [int(np.abs(k[row]).max()) for row in mask]
+        k_t = [int(np.abs(k[row]).max()) if row.any() else 0 for row in mask]
         print("  max |k| por tiempo: " + ", ".join(f"t={ti:.2f}:{kt}" for ti, kt in zip(t, k_t)))
 
-    return GRFHeatData(
-        split=split, k=k, t=t, a=a, u0_hat=u0_hat, mask=mask, tol=tol, window=window
+    return GRFData(
+        split=split, k=k, t=t, a=a, u0_hat=u0_hat, mask=mask, tol=tol, window=window,
+        resolution=resolution,
     )
 
 
-def heat_grf_datasets(
-    reference: Symbol, resolution: int = 1024, dtype: torch.dtype = torch.float32, seed: int = 0
-) -> Tuple[GRFHeatData, GRFHeatData]:
+def grf_datasets(
+    reference: Symbol,
+    resolution: int = 1024,
+    dtype: torch.dtype = torch.float32,
+    seed: int = 0,
+    k_cap: Optional[int] = None,
+    tau: float = 7.0,
+    decay: float = 2.5,
+) -> Tuple[GRFData, GRFData]:
     """Entrenamiento (100 u0, TRAIN_TIMES) y prueba (20 u0 nuevas, TEST_TIMES).
 
     Las condiciones iniciales de prueba salen de un flujo aleatorio distinto
@@ -199,27 +264,34 @@ def heat_grf_datasets(
     """
     seed_train, seed_test = np.random.SeedSequence(seed).spawn(2)
     print("ENTRENAMIENTO")
-    train = make_grf_heat_data(
-        reference, 100, TRAIN_TIMES, resolution, dtype, np.random.default_rng(seed_train).integers(2**32)
+    train = make_grf_data(
+        reference, 100, TRAIN_TIMES, resolution, dtype,
+        np.random.default_rng(seed_train).integers(2**32), tau, decay, k_cap=k_cap,
     )
     print("PRUEBA")
-    test = make_grf_heat_data(
-        reference, 20, TEST_TIMES, resolution, dtype, np.random.default_rng(seed_test).integers(2**32)
+    test = make_grf_data(
+        reference, 20, TEST_TIMES, resolution, dtype,
+        np.random.default_rng(seed_test).integers(2**32), tau, decay, k_cap=k_cap,
     )
     return train, test
 
 
-def field_rel_l2(symbol: LearnedSymbol, data: GRFHeatData) -> np.ndarray:
+# Nombres anteriores, cuando los datos eran solo del calor 1D (notebooks 01 y 03).
+make_grf_heat_data = make_grf_data
+heat_grf_datasets = grf_datasets
+
+
+def field_rel_l2(symbol: LearnedSymbol, data: GRFData) -> np.ndarray:
     """Error relativo L2 en espacio fisico, como en el paper: ||u_theta - u|| / ||u||.
 
-    Se reconstruye u(t, x) en la malla completa (todos los modos, tambien los
-    que la mascara descarta) con a_theta y con el simbolo exacto. Devuelve un
+    Se reconstruye u(t, x) en la malla completa de T^n (todos los modos, tambien
+    los que la mascara descarta) con a_theta y con el simbolo exacto. Devuelve un
     arreglo (n_ic, T) con el error de cada condicion inicial y tiempo.
     """
-    a_theta = np.real(symbol.evaluate_batch(data.k[:, None])).astype(float)
-    fields = []
-    for a in (a_theta, data.a):
-        u_hat = np.exp(-data.t[:, None] * a[None, :])[None] * data.u0_hat[:, None, :]  # (n_ic, T, N)
-        fields.append(data.resolution * np.real(np.fft.ifft(u_hat, axis=-1)))
-    pred, ref = fields
-    return np.linalg.norm(pred - ref, axis=-1) / np.linalg.norm(ref, axis=-1)
+    a_theta = np.real(symbol.evaluate_batch(data.k)).astype(float)
+    space_axes = tuple(range(-data.n, 0))
+    err = np.empty((data.u0_hat.shape[0], len(data.t)))
+    for j, t in enumerate(data.t):   # un tiempo por vez: en 2D el campo completo pesa
+        pred, ref = (data.to_physical(np.exp(-t * a)[None] * data.u0_hat) for a in (a_theta, data.a))
+        err[:, j] = np.sqrt(np.sum((pred - ref) ** 2, axis=space_axes) / np.sum(ref**2, axis=space_axes))
+    return err
