@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from ..symbol import Symbol
-from ..data.synthetic import to_device
+from ..data.grids import to_device
 from .losses import class_loss, parabolicity_terms
 from ..utils import LearnedSymbol, PhasePoints, Split
 

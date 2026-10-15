@@ -1,17 +1,17 @@
-"""Un experimento GRF completo, seccion por seccion, como en 03_barrido_grf.ipynb.
+"""Un experimento GRF completo, seccion por seccion, como en 02_calor_1d.ipynb.
 
-`GRFExperiment` reune lo que repiten los notebooks 04-06 (calor 2D y laplaciano
+`GRFExperiment` reune lo que repiten los notebooks 03-05 (calor 2D y laplaciano
 fraccionario en 1D y 2D): datos GRF, banda (c, C) y kappa, barrido, resultados,
 modelo seleccionado, prueba, curvas, simbolo aprendido, certificacion de
 parabolicidad y clase S^{m,rho}. Cada metodo es una seccion del notebook:
-imprime lo mismo que la celda de 03, guarda sus tablas (CSV) y figuras (PNG)
+imprime lo mismo que la celda de 02, guarda sus tablas (CSV) y figuras (PNG)
 en `results` y devuelve las tablas para mostrarlas con `display`.
 
-Configuracion comun (la de 03): covarianza 7^4 (-Delta + 7^2)^{-2.5}, tiempos
+Configuracion comun (la de 02): covarianza 7^4 (-Delta + 7^2)^{-2.5}, tiempos
 TRAIN_TIMES / TEST_TIMES, 100 + 20 condiciones iniciales, particion por k (80/20),
-mascara de recuperabilidad del dtype, c y C de los datos de entrenamiento con
-orden m, kappa = theoretical_kappa(), C_alpha del simbolo de referencia con
-margen 1.5, y el barrido de SWEEP con early stopping sobre la perdida total de
+todos los pares (k, t) con |k|_inf <= k_cap (k_max = k_cap), c y C de los datos de entrenamiento con
+orden m, kappa = theoretical_kappa(), C_alpha de los datos de entrenamiento
+(diferencias finitas de a_hat) con margen 1.5, y el barrido de SWEEP con early stopping sobre la perdida total de
 validacion (trayectoria + parabolicidad + L_class).
 
 En 2D el simbolo es radial, asi que las figuras sobre k se dibujan contra |k| y
@@ -31,16 +31,18 @@ import torch
 from ..symbol import Symbol
 from ..symbols.parabolic_mlp_symbol import ParabolicMLPSymbol
 from ..data.grf import GRFData, field_rel_l2, grf_datasets
-from ..data.synthetic import k_grid, split_trajectory_data
+from ..data.grids import k_grid, split_trajectory_data
 from ..verification.parabolicity import ParabolicityVerifier
 from ..verification.symbol_class import SymbolClassVerifier
-from .estimation import Bounds, estimate_bounds, estimate_symbol, oracle_class_constants, symbol_values
+from .estimation import (
+    Bounds, estimate_bounds, estimate_class_constants, estimate_symbol, oracle_class_constants, symbol_values,
+)
 from .evaluation import symbol_report, trajectory_report
 from .sweep import SweepRun, best_run, run_sweep, sweep_table
 from .training import TrainingConfig
 from ..utils import Split, default_device
 
-# El barrido de 03: profundidad x ancho x ubicacion del dropout x weight decay.
+# El barrido de 02: profundidad x ancho x ubicacion del dropout x weight decay.
 SWEEP = dict(
     depths=(2, 3, 4),
     widths=(32, 64, 128),
@@ -49,7 +51,7 @@ SWEEP = dict(
     weight_decays=(0.0, 1e-4),
 )
 
-# lambda con que se estima kappa_hat del simbolo de referencia (celda 6 de 03).
+# lambda con que se estima kappa_hat del simbolo de referencia (celda 6 de 02).
 LAM_VALUES = [complex(re, im) for re in (0, 1, 5, 10, 25, 50) for im in (-50, -10, -2, 0, 2, 10, 50)]
 
 # Rejilla de lambda de la CERTIFICACION, independiente de LAM_VALUES:
@@ -66,6 +68,18 @@ def relative_symbol_error(a_theta: np.ndarray, a_ref: np.ndarray) -> np.ndarray:
     """|a_theta - a| / |a|, con 0 donde a = 0 (k = 0, donde a_theta(0) = 0 por construccion)."""
     err = np.abs(a_theta - a_ref)
     return np.divide(err, np.abs(a_ref), out=np.zeros_like(err), where=np.abs(a_ref) > 0)
+
+
+def class_C_table(C_data: Dict, C_oracle: Dict, counts: Dict, margin: float) -> pd.DataFrame:
+    """Tabla de C_alpha: la de los datos (la que usa L_class), la del oraculo solo
+    como comparacion y cuantos k de entrenamiento entraron en cada alpha."""
+    tabla = pd.DataFrame({
+        "C_alpha datos (x%g)" % margin: {str(a): c for a, c in C_data.items()},
+        "C_alpha oraculo (x%g)" % margin: {str(a): C_oracle[a] for a in C_data},
+        "k_usados": {str(a): int(counts[a]) for a in C_data},
+    })
+    tabla.index.name = "alpha"
+    return tabla
 
 
 @dataclass
@@ -89,7 +103,7 @@ class GRFExperiment:
     delta: float = 0.1            # margen de la banda (c, C)
     class_margin: float = 1.5     # margen de las C_alpha
     val_fraction: float = 0.2
-    estimate_tol: float = 1e-10   # tol de estimate_symbol, como en 03
+    estimate_tol: float = 1e-10   # tol de estimate_symbol, como en 02
 
     # Se llenan seccion a seccion.
     grf_train: GRFData = field(init=False, repr=False)
@@ -101,6 +115,8 @@ class GRFExperiment:
     kappa_ref: float = field(init=False)
     kappa_theo: float = field(init=False)
     class_C: Dict = field(init=False, repr=False)
+    class_C_counts: Dict = field(init=False, repr=False)
+    class_C_oracle: Dict = field(init=False, repr=False)
     runs: list = field(init=False, repr=False)
     best: SweepRun = field(init=False, repr=False)
     summary: Dict = field(init=False, repr=False)
@@ -135,10 +151,10 @@ class GRFExperiment:
     def load_data(self) -> pd.DataFrame:
         """Datos GRF de entrenamiento y prueba, particion por k y ventana k_max."""
         self.grf_train, self.grf_test = grf_datasets(
-            self.reference, self.resolution, self.dtype, self.seed, k_cap=self.k_cap
+            self.reference, self.resolution, self.seed, k_cap=self.k_cap
         )
-        # La ventana de k que queda tras la mascara fija k_max del resto del experimento.
-        self.k_max = self.grf_train.window.k_inf_max
+        # k_cap fija k_max del resto del experimento (puntos de parabolicidad y certificacion).
+        self.k_max = self.k_cap
         self.train_data, self.val_data = split_trajectory_data(
             self.grf_train.split, val_fraction=self.val_fraction, seed=self.seed
         )
@@ -162,14 +178,14 @@ class GRFExperiment:
         )
 
         print()
-        print(f"k_cap = {self.k_cap}  ->  k_max = {self.k_max}  (ventana recuperable: {self.grf_train.window})")
+        print(f"k_cap = {self.k_cap}  ->  k_max = {self.k_max}  (ventana de k: {self.grf_train.window})")
         return tabla
 
     # ------------------------------------------------------------------
     # 2. c, C, kappa y C_alpha
     # ------------------------------------------------------------------
     def estimate_constants(self) -> pd.DataFrame:
-        """Banda (c, C) de los datos de entrenamiento, kappa teorico y C_alpha de la referencia."""
+        """Banda (c, C), kappa teorico y C_alpha, todo de los datos de entrenamiento."""
         k_values = k_grid(self.n, self.k_max)
         self.kappa_ref = ParabolicityVerifier(self.reference).estimate_kappa_batch(
             k_values, LAM_VALUES, omega=self.omega
@@ -182,9 +198,13 @@ class GRFExperiment:
         )
         self.kappa_theo = probe.theoretical_kappa(self.omega)
 
-        # C_alpha de la Def. 2.1 para L_class, del simbolo analitico en |k_i| <= k_max,
-        # para todos los alpha con |alpha| <= rho del simbolo aprendido.
-        self.class_C = oracle_class_constants(
+        # C_alpha de la Def. 2.1 para L_class, por diferencias finitas del mismo a_hat
+        # de entrenamiento, para todos los alpha con |alpha| <= rho del simbolo aprendido.
+        self.class_C, self.class_C_counts = estimate_class_constants(
+            k_est, a_hat, self.m, rho=probe.rho, margin=self.class_margin, return_counts=True
+        )
+        # Las del simbolo exacto en |k_i| <= k_max: solo para comparar, no se entrenan con ellas.
+        self.class_C_oracle = oracle_class_constants(
             self.reference, self.k_max, margin=self.class_margin, rho=probe.rho
         )
 
@@ -194,10 +214,7 @@ class GRFExperiment:
         print(f"kappa teorico        = {self.kappa_theo:.4f}")
         self.summary.update(c=self.bounds.c, C=self.bounds.C, kappa=self.kappa_theo)
 
-        tabla = pd.DataFrame(
-            {"C_alpha (x%g)" % self.class_margin: {str(a): c for a, c in self.class_C.items()}}
-        )
-        tabla.index.name = "alpha"
+        tabla = class_C_table(self.class_C, self.class_C_oracle, self.class_C_counts, self.class_margin)
         constantes = pd.Series({
             "c": self.bounds.c, "C": self.bounds.C, "m": self.m,
             "kappa_teorico": self.kappa_theo, "kappa_hat_referencia": self.kappa_ref,
@@ -309,15 +326,15 @@ class GRFExperiment:
     # 6. Prueba
     # ------------------------------------------------------------------
     def test(self) -> pd.DataFrame:
-        """Error en prueba: pares recuperables y espacio fisico; figura del error vs t."""
+        """Error en prueba: pares (k, t) del split y espacio fisico; figura del error vs t."""
         test_traj = trajectory_report(self.symbol, self.grf_test.split)
         test_traj.pop("n")
-        print(f"PRUEBA -- {self.grf_test.split['k'].shape[0]:,} pares recuperables, "
+        print(f"PRUEBA -- {self.grf_test.split['k'].shape[0]:,} pares (k, t), "
               f"{self.grf_test.u0_hat.shape[0]} condiciones iniciales nuevas")
         err_field = field_rel_l2(self.symbol, self.grf_test)   # (n_ic, T)
         err_train = field_rel_l2(self.symbol, self.grf_train)
 
-        print(f"error relativo L2 (pares recuperables) = {test_traj['rel_l2']:.4e}")
+        print(f"error relativo L2 (pares (k, t))        = {test_traj['rel_l2']:.4e}")
         print(f"error relativo L2 (espacio fisico)     = {err_field.mean():.4e}  "
               f"(medio; max {err_field.max():.4e})")
         self.summary.update(test_rel_l2=test_traj["rel_l2"], test_rel_l2_fisico=float(err_field.mean()))
@@ -496,7 +513,7 @@ class GRFExperiment:
         return dict(self.summary)
 
 
-# Columnas de la tabla resumen de los notebooks con varios alpha (05 y 06).
+# Columnas de la tabla resumen de los notebooks con varios alpha (04 y 05).
 SUMMARY_COLS = [
     "alpha", "ventana_k", "c", "C", "kappa", "configuracion", "val_rel_l2", "test_rel_l2",
     "test_rel_l2_fisico", "error_simbolo_medio", "peor_ratio", "multiindices_consistentes",

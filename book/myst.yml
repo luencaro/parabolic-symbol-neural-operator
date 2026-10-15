@@ -6,9 +6,11 @@ project:
   authors:
     - name: "<TU NOMBRE>"
   toc:
-    - file: ../notebooks/01_verificadores.ipynb
-    - file: ../notebooks/02_barrido.ipynb
-    - file: ../notebooks/03_barrido_grf.ipynb
+    - file: ../notebooks/01_exploracion.ipynb
+    - file: ../notebooks/02_calor_1d.ipynb
+    - file: ../notebooks/03_calor_2d.ipynb
+    - file: ../notebooks/04_fraccionario_1d.ipynb
+    - file: ../notebooks/05_fraccionario_2d.ipynb
 
 site:
   template: book-theme

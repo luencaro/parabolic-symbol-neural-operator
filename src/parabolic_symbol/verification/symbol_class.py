@@ -26,7 +26,7 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 import numpy as np
 
 from ..symbol import Symbol
-from ..data.synthetic import k_grid
+from ..data.grids import k_grid
 from ..utils import bracket, multi_indices
 
 

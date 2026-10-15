@@ -17,18 +17,16 @@ La misma convencion fija el campo aleatorio: -Delta tiene simbolo |k|^2.
   n >= 2 de `sample_grf_nd` (layout de `grf_wavenumbers`: medio espacio de k,
   porque u_hat(-k) = conj(u_hat(k)) no da informacion nueva).
 - Solucion exacta: u_hat(t, k) = exp(-t a(k)) u_hat0(k).
-- Mascara de recuperabilidad: se descartan los pares (k, t) con
-  exp(-t a(k)) <= eps del dtype de entrenamiento, porque ahi u_hat(t, k) cae por
-  debajo de la precision de maquina respecto de u_hat0(k) y no informa sobre a(k).
-  Con `k_cap` se descartan ademas los k con |k|_inf > k_cap.
+- Se guardan todos los pares (k, t) con |k|_inf <= k_cap, como en el paper,
+  aunque exp(-t a(k)) caiga por debajo de la precision de maquina. `k_cap` es
+  obligatorio (64 en 1D, 32 en 2D en los notebooks) y fija k_max.
 - El exponente de la covarianza se llama `decay` (2.5 por defecto) para no
   confundirlo con el alpha del laplaciano fraccionario; las funciones aceptan
   todavia `alpha=` como nombre antiguo.
 
-`split` de cada conjunto tiene el mismo formato que `make_trajectory_data`
-(claves k, t, u0, u_ref; una fila por condicion inicial y par (k, t)
-recuperable), asi que `split_trajectory_data`, `estimate_symbol` y `train`
-funcionan sin cambios.
+`split` de cada conjunto tiene claves k, t, u0, u_ref, con una fila por
+condicion inicial y par (k, t), el formato de `split_trajectory_data`,
+`estimate_symbol` y `train`.
 """
 from __future__ import annotations
 
@@ -51,14 +49,14 @@ TEST_TIMES = 0.05 + 0.05 * np.arange(20)
 class GRFData:
     """Un conjunto (entrenamiento o prueba) de trayectorias de u_t + a(D) u = 0."""
 
-    split: Split            # formato de train(...): solo pares recuperables
+    split: Split            # formato de train(...): pares (k, t) con |k|_inf <= k_cap
     k: np.ndarray           # (N, n) frecuencias enteras, en el layout de `spectral_shape`
     t: np.ndarray           # (T,)
     a: np.ndarray           # (N,) simbolo de referencia en k
     u0_hat: np.ndarray      # (n_ic, N) coeficientes de u0, todos los modos
-    mask: np.ndarray        # (T, N) pares (k, t) recuperables (y con |k|_inf <= k_cap)
-    tol: float
-    window: KWindow         # k que sobreviven a la mascara
+    mask: np.ndarray        # (T, N) pares (k, t) del split: los de |k|_inf <= k_cap
+    k_cap: int
+    window: KWindow         # k del split
     resolution: int         # puntos de la malla por eje
 
     @property
@@ -180,26 +178,25 @@ def make_grf_data(
     n_ic: int,
     times: Sequence[float],
     resolution: int = 1024,
-    dtype: torch.dtype = torch.float32,
     seed: int = 0,
     tau: float = 7.0,
     decay: float = 2.5,
     verbose: bool = True,
-    k_cap: Optional[int] = None,
     *,
+    k_cap: int,
     alpha: Optional[float] = None,
 ) -> GRFData:
     """n_ic condiciones iniciales GRF en T^n evolucionadas con el simbolo `reference`.
 
     n = reference.n. En n = 1 se usa `sample_grf` (todos los k, orden de np.fft);
-    en n >= 2, `sample_grf_nd` (layout de `grf_wavenumbers`). `dtype` es la
-    precision con la que se va a entrenar: fija la tolerancia
-    eps = finfo(dtype).eps de la mascara de recuperabilidad. `k_cap`, si se da,
-    descarta ademas los k con |k|_inf > k_cap. Los tensores del split se guardan
-    en float64 / complex128, como en `make_trajectory_data`, con k de forma
+    en n >= 2, `sample_grf_nd` (layout de `grf_wavenumbers`). El split tiene
+    todos los pares (k, t) con |k|_inf <= k_cap (obligatorio, < resolution / 2).
+    Los tensores del split se guardan en float64 / complex128, con k de forma
     (filas, n); `train` los pasa al dtype del modelo.
     """
     n = reference.n
+    if not 0 <= k_cap < resolution // 2:
+        raise ValueError(f"k_cap debe estar en [0, resolution / 2): {k_cap}")
     decay = _decay(decay, alpha)
     rng = np.random.default_rng(seed)
     if n == 1:
@@ -212,11 +209,9 @@ def make_grf_data(
     a = symbol_values(reference, k)
     t = np.asarray(times, dtype=float)
 
-    tol = float(torch.finfo(dtype).eps)
-    mask = np.exp(-t[:, None] * a[None, :]) > tol      # (T, N)
-    if k_cap is not None:
-        mask &= np.abs(k).max(axis=1) <= k_cap
-    it, ik = np.nonzero(mask)                           # pares (t, k) recuperables
+    en_cap = np.abs(k).max(axis=1) <= k_cap
+    mask = np.broadcast_to(en_cap, (len(t), len(k))).copy()   # (T, N)
+    it, ik = np.nonzero(mask)                                 # pares (t, k) del split
 
     t_rows = np.tile(t[it], n_ic)
     k_rows = np.tile(k[ik], (n_ic, 1))
@@ -232,18 +227,14 @@ def make_grf_data(
 
     if verbose:
         malla = "x".join([str(resolution)] * n)
-        cap = "" if k_cap is None else f", |k|_inf <= {k_cap}"
         print(
             f"{n_ic} condiciones iniciales x {len(t)} tiempos, resolucion {malla}: "
-            f"{len(it)} de {mask.size} pares (k, t) recuperables (eps={tol:.3g}{cap}) "
-            f"-> {split['k'].shape[0]:,} muestras"
+            f"{len(it)} pares (k, t) con |k|_inf <= {k_cap} -> {split['k'].shape[0]:,} muestras"
         )
-        print(f"  ventana de k recuperable: {window}")
-        k_t = [int(np.abs(k[row]).max()) if row.any() else 0 for row in mask]
-        print("  max |k| por tiempo: " + ", ".join(f"t={ti:.2f}:{kt}" for ti, kt in zip(t, k_t)))
+        print(f"  ventana de k: {window}")
 
     return GRFData(
-        split=split, k=k, t=t, a=a, u0_hat=u0_hat, mask=mask, tol=tol, window=window,
+        split=split, k=k, t=t, a=a, u0_hat=u0_hat, mask=mask, k_cap=k_cap, window=window,
         resolution=resolution,
     )
 
@@ -251,9 +242,9 @@ def make_grf_data(
 def grf_datasets(
     reference: Symbol,
     resolution: int = 1024,
-    dtype: torch.dtype = torch.float32,
     seed: int = 0,
-    k_cap: Optional[int] = None,
+    *,
+    k_cap: int,
     tau: float = 7.0,
     decay: float = 2.5,
 ) -> Tuple[GRFData, GRFData]:
@@ -265,18 +256,18 @@ def grf_datasets(
     seed_train, seed_test = np.random.SeedSequence(seed).spawn(2)
     print("ENTRENAMIENTO")
     train = make_grf_data(
-        reference, 100, TRAIN_TIMES, resolution, dtype,
+        reference, 100, TRAIN_TIMES, resolution,
         np.random.default_rng(seed_train).integers(2**32), tau, decay, k_cap=k_cap,
     )
     print("PRUEBA")
     test = make_grf_data(
-        reference, 20, TEST_TIMES, resolution, dtype,
+        reference, 20, TEST_TIMES, resolution,
         np.random.default_rng(seed_test).integers(2**32), tau, decay, k_cap=k_cap,
     )
     return train, test
 
 
-# Nombres anteriores, cuando los datos eran solo del calor 1D (notebooks 01 y 03).
+# Nombres anteriores, cuando los datos eran solo del calor 1D (notebooks 01 y 02).
 make_grf_heat_data = make_grf_data
 heat_grf_datasets = grf_datasets
 
@@ -285,7 +276,7 @@ def field_rel_l2(symbol: LearnedSymbol, data: GRFData) -> np.ndarray:
     """Error relativo L2 en espacio fisico, como en el paper: ||u_theta - u|| / ||u||.
 
     Se reconstruye u(t, x) en la malla completa de T^n (todos los modos, tambien
-    los que la mascara descarta) con a_theta y con el simbolo exacto. Devuelve un
+    los de |k|_inf > k_cap) con a_theta y con el simbolo exacto. Devuelve un
     arreglo (n_ic, T) con el error de cada condicion inicial y tiempo.
     """
     a_theta = np.real(symbol.evaluate_batch(data.k)).astype(float)

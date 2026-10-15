@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 import torch
 
 from ..symbol import Symbol
-from ..data.synthetic import sample_k_points, sample_phase_points, to_device
+from ..data.grids import sample_k_points, sample_phase_points, to_device
 from .estimation import resolve_class_constants
 from .evaluation import METRICS, evaluate_split
 from .losses import ClassConstants, class_loss, parabolicity_loss, trajectory_loss
