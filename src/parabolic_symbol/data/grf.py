@@ -272,17 +272,21 @@ make_grf_heat_data = make_grf_data
 heat_grf_datasets = grf_datasets
 
 
-def field_rel_l2(symbol: LearnedSymbol, data: GRFData) -> np.ndarray:
+def field_rel_l2(
+    symbol: LearnedSymbol, data: GRFData, times: Optional[Sequence[float]] = None
+) -> np.ndarray:
     """Error relativo L2 en espacio fisico, como en el paper: ||u_theta - u|| / ||u||.
 
     Se reconstruye u(t, x) en la malla completa de T^n (todos los modos, tambien
-    los de |k|_inf > k_cap) con a_theta y con el simbolo exacto. Devuelve un
-    arreglo (n_ic, T) con el error de cada condicion inicial y tiempo.
+    los de |k|_inf > k_cap) con a_theta y con el simbolo exacto, en los tiempos
+    `times` (por defecto los del conjunto, data.t). Devuelve un arreglo
+    (n_ic, T) con el error de cada condicion inicial y tiempo.
     """
+    times = data.t if times is None else np.asarray(times, dtype=float)
     a_theta = np.real(symbol.evaluate_batch(data.k)).astype(float)
     space_axes = tuple(range(-data.n, 0))
-    err = np.empty((data.u0_hat.shape[0], len(data.t)))
-    for j, t in enumerate(data.t):   # un tiempo por vez: en 2D el campo completo pesa
+    err = np.empty((data.u0_hat.shape[0], len(times)))
+    for j, t in enumerate(times):   # un tiempo por vez: en 2D el campo completo pesa
         pred, ref = (data.to_physical(np.exp(-t * a)[None] * data.u0_hat) for a in (a_theta, data.a))
         err[:, j] = np.sqrt(np.sum((pred - ref) ** 2, axis=space_axes) / np.sum(ref**2, axis=space_axes))
     return err

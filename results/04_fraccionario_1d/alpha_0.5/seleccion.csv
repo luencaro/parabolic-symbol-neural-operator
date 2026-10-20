@@ -6,3 +6,7 @@ clase,0.0
 rel_l2,0.00037135180173581285
 peor ratio,0.5945929717688936
 puntos con ratio > 1,0.0
+capas,2
+ancho,32
+dropout_layers,none
+weight_decay,0.0001

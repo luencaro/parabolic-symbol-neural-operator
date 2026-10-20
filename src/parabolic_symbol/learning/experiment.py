@@ -16,12 +16,22 @@ validacion (trayectoria + parabolicidad + L_class).
 
 En 2D el simbolo es radial, asi que las figuras sobre k se dibujan contra |k| y
 se agrega un mapa del error relativo sobre (k1, k2).
+
+Modelo guardado: tras la seleccion, `select` guarda el modelo elegido en
+`results/modelo.pt` (`save_experiment_model`): pesos de g_theta y todo lo
+necesario para reconstruirlo y regenerar sus datos sin el notebook.
+`load_experiment_model` reconstruye el ParabolicMLPSymbol,
+`GRFExperiment.from_checkpoint` + `regenerate_data` regeneran los datos con la
+misma semilla, y `retrain_selected` reentrena solo la configuracion elegida
+cuando hay resultados de una corrida anterior pero no `modelo.pt`.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import ast
+import warnings
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,6 +39,8 @@ import pandas as pd
 import torch
 
 from ..symbol import Symbol
+from ..symbols.fractional_laplacian import FractionalLaplacianSymbol
+from ..symbols.heat import HeatSymbol
 from ..symbols.parabolic_mlp_symbol import ParabolicMLPSymbol
 from ..data.grf import GRFData, field_rel_l2, grf_datasets
 from ..data.grids import k_grid, split_trajectory_data
@@ -40,7 +52,7 @@ from .estimation import (
 from .evaluation import symbol_report, trajectory_report
 from .sweep import SweepRun, best_run, run_sweep, sweep_table
 from .training import TrainingConfig
-from ..utils import Split, default_device
+from ..utils import DROPOUT_PLACEMENTS, Split, default_device
 
 # El barrido de 02: profundidad x ancho x ubicacion del dropout x weight decay.
 SWEEP = dict(
@@ -80,6 +92,152 @@ def class_C_table(C_data: Dict, C_oracle: Dict, counts: Dict, margin: float) -> 
     })
     tabla.index.name = "alpha"
     return tabla
+
+
+# ----------------------------------------------------------------------
+# Modelo guardado (modelo.pt)
+# ----------------------------------------------------------------------
+MODEL_FILE = "modelo.pt"
+CHECKPOINT_FORMAT = 1
+
+# Simbolos de referencia que se pueden reconstruir desde modelo.pt.
+REFERENCE_SYMBOLS = {"HeatSymbol": HeatSymbol, "FractionalLaplacianSymbol": FractionalLaplacianSymbol}
+
+
+def _reference_spec(reference: Symbol) -> Dict:
+    """Clase y argumentos del simbolo de referencia, para reconstruirlo."""
+    if isinstance(reference, HeatSymbol):
+        return {"clase": "HeatSymbol", "kwargs": {"n": reference.n}}
+    if isinstance(reference, FractionalLaplacianSymbol):
+        return {"clase": "FractionalLaplacianSymbol",
+                "kwargs": {"n": reference.n, "alpha": float(reference.alpha), "rho": reference.rho}}
+    raise TypeError(f"no se sabe guardar el simbolo de referencia {reference!r}")
+
+
+def _build_reference(spec: Dict) -> Symbol:
+    return REFERENCE_SYMBOLS[spec["clase"]](**spec["kwargs"])
+
+
+def _dtype_name(dtype: torch.dtype) -> str:
+    return str(dtype).replace("torch.", "")
+
+
+def save_experiment_model(
+    path: Union[str, Path],
+    run: SweepRun,
+    *,
+    reference: Symbol,
+    m: float,
+    resolution: int,
+    k_cap: int,
+    config: TrainingConfig,
+    seed: int = 0,
+    val_fraction: float = 0.2,
+    dtype: torch.dtype = torch.float64,
+    omega: float = 1.0,
+    delta: float = 0.1,
+    class_margin: float = 1.5,
+    estimate_tol: float = 1e-10,
+) -> Path:
+    """Guarda la corrida elegida con torch.save, lista para reconstruirla sin el notebook.
+
+    Contiene: los pesos de g_theta (state_dict), los argumentos de
+    ParabolicMLPSymbol (n, m, c, C, hidden, rho, dropout, dropout_layers,
+    dtype), los datos (simbolo de referencia, semilla, resolucion, k_cap,
+    val_fraction), las constantes del experimento (omega, delta, margen y tol)
+    y la configuracion de entrenamiento usada (`config` con el weight decay de
+    la corrida). Todo son tipos simples, asi que se lee con weights_only=True.
+    """
+    path = Path(path)
+    symbol = run.symbol
+    config = replace(config, weight_decay=run.weight_decay, class_reference=None)
+    checkpoint = {
+        "formato": CHECKPOINT_FORMAT,
+        "state_dict": {key: value.detach().cpu() for key, value in symbol.net.state_dict().items()},
+        "simbolo": {
+            "n": symbol.n, "m": float(symbol.m), "c": symbol.c, "C": symbol.C,
+            "hidden": tuple(symbol.hidden), "rho": symbol.rho, "dropout": symbol.dropout,
+            "dropout_layers": tuple(symbol.dropout_layers), "dtype": _dtype_name(symbol.dtype),
+        },
+        "seleccion": {
+            "capas": run.n_layers, "ancho": run.width, "dropout_layers": run.dropout_layers,
+            "dropout_rate": run.dropout_rate, "weight_decay": run.weight_decay,
+            "val_rel_l2": run.val_rel_l2, "mejor_epoca": run.best_epoch, "epocas": run.epochs_run,
+        },
+        "datos": {
+            "referencia": _reference_spec(reference), "semilla": seed, "resolucion": resolution,
+            "k_cap": k_cap, "val_fraction": val_fraction, "dtype": _dtype_name(dtype),
+        },
+        "experimento": {
+            "m": float(m), "omega": omega, "delta": delta, "class_margin": class_margin,
+            "estimate_tol": estimate_tol,
+        },
+        "entrenamiento": asdict(config),
+    }
+    torch.save(checkpoint, path)
+    print(f"modelo guardado en {path}")
+    return path
+
+
+def load_checkpoint(path: Union[str, Path]) -> Dict:
+    """El diccionario de modelo.pt (ver `save_experiment_model`)."""
+    checkpoint = torch.load(Path(path), map_location="cpu", weights_only=True)
+    if checkpoint.get("formato") != CHECKPOINT_FORMAT:
+        raise ValueError(f"{path}: formato de modelo.pt desconocido {checkpoint.get('formato')!r}")
+    return checkpoint
+
+
+def load_experiment_model(
+    path: Union[str, Path], device: Optional[torch.device] = None
+) -> ParabolicMLPSymbol:
+    """Reconstruye el ParabolicMLPSymbol guardado en modelo.pt, en modo eval."""
+    checkpoint = load_checkpoint(path)
+    spec = checkpoint["simbolo"]
+    symbol = ParabolicMLPSymbol(
+        n=spec["n"], m=spec["m"], c=spec["c"], C=spec["C"], hidden=spec["hidden"],
+        rho=spec["rho"], dropout=spec["dropout"], dropout_layers=spec["dropout_layers"],
+        device=device, dtype=getattr(torch, spec["dtype"]),
+    )
+    symbol.net.load_state_dict(checkpoint["state_dict"])
+    symbol.net.eval()
+    return symbol
+
+
+def selected_config(results: Union[str, Path]) -> Dict:
+    """La configuracion elegida de una corrida anterior y su val_rel_l2 reportado.
+
+    Se lee de seleccion.csv. Los seleccion.csv anteriores a modelo.pt solo
+    traen las metricas, no la configuracion: entonces se toma la fila de menor
+    val_rel_l2 de barrido.csv (la que elige `best_run`) y se comprueba que su
+    val_rel_l2 es el de seleccion.csv. Sin seleccion.csv (02_calor_1d) basta
+    barrido.csv.
+    """
+    results = Path(results)
+    seleccion = None
+    if (results / "seleccion.csv").exists():
+        seleccion = pd.read_csv(results / "seleccion.csv", index_col=0).iloc[:, 0]
+    if seleccion is not None and "capas" in seleccion.index:
+        config = {
+            "capas": int(seleccion["capas"]), "ancho": int(seleccion["ancho"]),
+            "dropout_layers": str(seleccion["dropout_layers"]),
+            "weight_decay": float(seleccion["weight_decay"]),
+            "val_rel_l2": float(seleccion["rel_l2"]),
+        }
+    else:
+        barrido = pd.read_csv(results / "barrido.csv")
+        fila = barrido.loc[barrido["val_rel_l2"].idxmin()]
+        config = {
+            "capas": int(fila["capas"]), "ancho": int(fila["ancho"]),
+            "dropout_layers": str(fila["dropout_layers"]),
+            "weight_decay": float(fila["weight_decay"]),
+            "val_rel_l2": float(fila["val_rel_l2"]),
+        }
+        if seleccion is not None and not np.isclose(float(seleccion["rel_l2"]), config["val_rel_l2"], rtol=1e-9):
+            raise ValueError(f"{results}: la mejor fila de barrido.csv no es la de seleccion.csv")
+    # Ubicacion del dropout: una etiqueta de DROPOUT_PLACEMENTS o indices explicitos "(1, 2)".
+    if config["dropout_layers"] not in DROPOUT_PLACEMENTS:
+        config["dropout_layers"] = tuple(ast.literal_eval(config["dropout_layers"]))
+    return config
 
 
 @dataclass
@@ -127,6 +285,20 @@ class GRFExperiment:
         self.device = torch.device(self.device) if self.device is not None else default_device()
         self.summary = {}
 
+    @classmethod
+    def from_checkpoint(cls, path: Union[str, Path], device: Optional[torch.device] = None) -> "GRFExperiment":
+        """El experimento de un modelo.pt, con `results` en su carpeta. Sin datos:
+        `regenerate_data` los regenera con la misma semilla."""
+        checkpoint = load_checkpoint(path)
+        datos, exp = checkpoint["datos"], checkpoint["experimento"]
+        return cls(
+            reference=_build_reference(datos["referencia"]), m=exp["m"],
+            resolution=datos["resolucion"], k_cap=datos["k_cap"], results=Path(path).parent,
+            dtype=getattr(torch, datos["dtype"]), device=device, seed=datos["semilla"],
+            omega=exp["omega"], delta=exp["delta"], class_margin=exp["class_margin"],
+            val_fraction=datos["val_fraction"], estimate_tol=exp["estimate_tol"],
+        )
+
     @property
     def n(self) -> int:
         return self.reference.n
@@ -150,14 +322,7 @@ class GRFExperiment:
     # ------------------------------------------------------------------
     def load_data(self) -> pd.DataFrame:
         """Datos GRF de entrenamiento y prueba, particion por k y ventana k_max."""
-        self.grf_train, self.grf_test = grf_datasets(
-            self.reference, self.resolution, self.seed, k_cap=self.k_cap
-        )
-        # k_cap fija k_max del resto del experimento (puntos de parabolicidad y certificacion).
-        self.k_max = self.k_cap
-        self.train_data, self.val_data = split_trajectory_data(
-            self.grf_train.split, val_fraction=self.val_fraction, seed=self.seed
-        )
+        self.regenerate_data()
 
         splits = {"entrenamiento": self.train_data, "validacion": self.val_data,
                   "prueba": self.grf_test.split}
@@ -180,6 +345,17 @@ class GRFExperiment:
         print()
         print(f"k_cap = {self.k_cap}  ->  k_max = {self.k_max}  (ventana de k: {self.grf_train.window})")
         return tabla
+
+    def regenerate_data(self) -> None:
+        """Entrenamiento, validacion y prueba; con la misma semilla dan los mismos datos."""
+        self.grf_train, self.grf_test = grf_datasets(
+            self.reference, self.resolution, self.seed, k_cap=self.k_cap
+        )
+        # k_cap fija k_max del resto del experimento (puntos de parabolicidad y certificacion).
+        self.k_max = self.k_cap
+        self.train_data, self.val_data = split_trajectory_data(
+            self.grf_train.split, val_fraction=self.val_fraction, seed=self.seed
+        )
 
     # ------------------------------------------------------------------
     # 2. c, C, kappa y C_alpha
@@ -226,13 +402,17 @@ class GRFExperiment:
     # ------------------------------------------------------------------
     # 3. Barrido
     # ------------------------------------------------------------------
+    def base_config(self) -> TrainingConfig:
+        """Configuracion base de TrainingConfig: solo k_max y las C_alpha dependen de los datos."""
+        return TrainingConfig(k_max=self.k_max, class_C=self.class_C)
+
     def sweep(self, **overrides) -> None:
         """El barrido de SWEEP con la configuracion base de TrainingConfig.
 
         `overrides` reemplaza ejes de SWEEP (p. ej. para una prueba rapida).
         """
         grid = {**SWEEP, **overrides}
-        base_config = TrainingConfig(k_max=self.k_max, class_C=self.class_C)
+        base_config = self.base_config()
         self.runs = run_sweep(
             self.train_data,
             self.val_data,
@@ -301,8 +481,58 @@ class GRFExperiment:
             "peor ratio": best.val_par_max_ratio,
             "puntos con ratio > 1": best.val_par_violation,
         }, name="validacion (mejor epoca)")
-        val.to_csv(self.results / "seleccion.csv")
+        # seleccion.csv lleva ademas la configuracion elegida, para `retrain_selected`.
+        configuracion_elegida = pd.Series({
+            "capas": best.n_layers, "ancho": best.width,
+            "dropout_layers": best.dropout_layers, "weight_decay": best.weight_decay,
+        }, name=val.name)
+        pd.concat([val.astype(object), configuracion_elegida]).to_csv(self.results / "seleccion.csv")
+        self.save_model()
         return val
+
+    def save_model(self) -> Path:
+        """Guarda el modelo elegido en results/modelo.pt (`save_experiment_model`)."""
+        return save_experiment_model(
+            self.results / MODEL_FILE, self.best, reference=self.reference, m=self.m,
+            resolution=self.resolution, k_cap=self.k_cap, config=self.base_config(), seed=self.seed,
+            val_fraction=self.val_fraction, dtype=self.dtype, omega=self.omega, delta=self.delta,
+            class_margin=self.class_margin, estimate_tol=self.estimate_tol,
+        )
+
+    def retrain_selected(self, rtol: float = 1e-3) -> SweepRun:
+        """Reentrena SOLO la configuracion elegida de una corrida anterior y guarda modelo.pt.
+
+        Para resultados sin modelo.pt: la configuracion sale de `selected_config`
+        (seleccion.csv o barrido.csv), sin repetir el barrido. Los datos, (c, C)
+        y las C_alpha se recalculan si hace falta (son deterministas), y se
+        entrena con `sweep` restringido a esa configuracion, asi que la red, la
+        semilla y TrainingConfig son las del barrido. Avisa si el error de
+        validacion no reproduce el reportado (diferencia relativa > rtol).
+        """
+        config = selected_config(self.results)
+        if not hasattr(self, "train_data"):
+            self.load_data()
+        if not hasattr(self, "class_C"):
+            self.estimate_constants()
+        print(f"reentrenando solo {config['capas']}x{config['ancho']}, dropout {config['dropout_layers']}, "
+              f"wd={config['weight_decay']:g} (sin barrido)")
+        self.sweep(
+            depths=(config["capas"],), widths=(config["ancho"],),
+            dropout_layers=(config["dropout_layers"],), weight_decays=(config["weight_decay"],),
+        )
+        self.best = best_run(self.runs)
+        reportado, obtenido = config["val_rel_l2"], self.best.val_rel_l2
+        diferencia = abs(obtenido - reportado) / reportado
+        print(f"val_rel_l2 reportado = {reportado:.6e}, reentrenado = {obtenido:.6e} "
+              f"(diferencia relativa {diferencia:.2e})")
+        if diferencia > rtol:
+            warnings.warn(
+                f"{self.results}: el reentrenamiento no reproduce el error de validacion reportado "
+                f"({obtenido:.6e} frente a {reportado:.6e}); los resultados guardados pueden venir "
+                f"de otros datos o de otra version del codigo."
+            )
+        self.save_model()
+        return self.best
 
     def metrics(self):
         """Metricas de trayectoria (muestras) y del simbolo (k de entrenamiento / validacion)."""
