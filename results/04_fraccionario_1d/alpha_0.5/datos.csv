@@ -1,0 +1,4 @@
+conjunto,muestras,k_unicos
+entrenamiento,103000,103
+validacion,26000,26
+prueba,51600,129

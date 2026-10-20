@@ -53,7 +53,7 @@ La pertenencia está garantizada cualitativamente, pero las constantes $C_\alpha
 
 1. **`estimate_symbol`.** Como $\log|\widehat u(t,k)/\widehat u_0(k)|=-t\,a(k)$, para cada $k$ se ajusta una recta por el origen por mínimos cuadrados ponderados, con pesos $|\widehat u_0|^2$:
    $\hat a(k)=-\sum_i w_i t_i y_i\big/\sum_i w_i t_i^2$.
-   Se descartan los pares con $|\widehat u|\le \text{tol}\,|\widehat u_0|$ (máscara de recuperabilidad).
+   Se descartan los pares con $|\widehat u|\le \text{tol}\,|\widehat u_0|$ (filtro de señal): $\log|\widehat u/\widehat u_0|$ no tiene sentido cuando $\widehat u$ es cero o ruido de redondeo.
 2. **`estimate_bounds`.** Con $h(k)=\hat a(k)/\langle k\rangle^m$ para $k\neq0$, se toma $c=(1-\delta)\min h$ y $C=(1+\delta)\max h$, con $\delta=0.1$.
 
 Para el calor sale $(c,C)\approx(0.45,\,1.10)$, y con $\omega=1$, $\kappa=\sqrt2/0.45\approx3.14$.
@@ -71,7 +71,7 @@ $$\mathcal L=\lambda_{\text{traj}}\,\mathcal L_{\text{traj}}+\lambda_{\text{par}
 | $\mathcal L_{\text{class}}$ | `class_loss` | hinge² de $\langle k\rangle^{\lvert\alpha\rvert-m}\lvert\Delta_k^\alpha a_\theta(k)\rvert\le C_\alpha$ para $\lvert\alpha\rvert\le\rho$ |
 
 - $\mathcal L_{\text{par}}$ y $\mathcal L_{\text{class}}$ se evalúan en puntos $(k,\lambda)$ y $k$ nuevos en cada lote. Las diferencias finitas de $\mathcal L_{\text{class}}$ salen de un solo `forward` por lotes, así que el término es diferenciable.
-- Las $C_\alpha$ se calculan del símbolo de referencia en la ventana de entrenamiento, con margen $1.5$.
+- Las $C_\alpha$ se estiman de los datos de entrenamiento (`estimate_class_constants`: diferencias finitas de $\hat a$), con margen $1.5$.
 - **Optimización:** `AdamW` con `lr = 1e-3`, que decae exponencialmente hasta `1e-5`, y recorte de gradiente en 1. El weight decay solo se aplica a las `Linear` ocultas interiores.
 - **Early stopping:** paciencia de 30 épocas sobre la pérdida total de validación, **incluyendo $\mathcal L_{\text{class}}$** (`early_stopping_class=True`). Al terminar se restauran los pesos de la mejor época.
 - **Configuración base:** los valores por defecto de `TrainingConfig`. En los notebooks solo se pasan `k_max` y `class_C`, que dependen de los datos.
@@ -106,33 +106,38 @@ src/parabolic_symbol/
 │   ├── parabolicity.py           # ParabolicityVerifier: estima kappa de la Def. 2.3
 │   └── symbol_class.py           # SymbolClassVerifier: estima C_alpha de la Def. 2.1
 ├── data/
-│   ├── synthetic.py              # muestras (k, t, u0, u), puntos (k, lambda) y particion por k
-│   └── grf.py                    # calor 1D con condiciones iniciales GRF (paper, Sec. 5.1)
+│   ├── grids.py                  # rejillas y muestreo de k y (k, lambda), particion por k
+│   └── grf.py                    # datos GRF en T^n (paper, Sec. 5.1): calor y laplaciano fraccionario
 └── learning/
     ├── estimation.py             # a_hat(k), banda (c, C) y C_alpha desde los datos
     ├── losses.py                 # L_traj, L_par, L_class
     ├── training.py               # TrainingConfig y bucle de entrenamiento
     ├── evaluation.py             # metricas y peor ratio de parabolicidad
-    └── sweep.py                  # barrido de arquitecturas y seleccion
+    ├── sweep.py                  # barrido de arquitecturas y seleccion
+    └── experiment.py             # GRFExperiment: el flujo completo de un notebook GRF
 notebooks/
-├── 01_verificadores.ipynb        # verificadores sobre simbolos analiticos y contraejemplos
-├── 02_barrido.ipynb              # barrido y certificacion, calor en T^2
-└── 03_barrido_grf.ipynb          # lo mismo con los datos GRF del calor 1D + conjunto de prueba
-results/
-├── 02_barrido/                   # barrido.csv y figuras PNG
-└── 03_barrido_grf/
-book/myst.yml                     # Jupyter Book con los tres notebooks
+├── 01_exploracion.ipynb          # simbolos, datos GRF y verificadores (Defs. 2.1 y 2.3)
+├── 02_calor_1d.ipynb             # barrido, prueba y certificacion: calor en T^1
+├── 03_calor_2d.ipynb             # lo mismo en T^2
+├── 04_fraccionario_1d.ipynb      # laplaciano fraccionario |k|^alpha en T^1, alpha in {0.5, 1, 1.5}
+└── 05_fraccionario_2d.ipynb      # lo mismo en T^2
+results/                          # una carpeta por notebook: tablas CSV y figuras PNG
+├── 02_calor_1d/
+├── 03_calor_2d/
+├── 04_fraccionario_1d/           # una subcarpeta por alpha y resumen.csv
+└── 05_fraccionario_2d/
+book/myst.yml                     # Jupyter Book con los notebooks
 ```
 
 ## Notebooks
 
-- **`01_verificadores`:** comprueba `ParabolicityVerifier` y `SymbolClassVerifier` sobre el calor, el laplaciano fraccionario y símbolos que no son parabólicos.
-- **`02_barrido`:** calor en $\mathbb T^2$ con $10^5$ muestras $(k,t)$. Tiene $|k_i|\le12$, $t$ log-uniforme en $[10^{-3},1]$ y $\widehat u_0\sim\mathcal N_{\mathbb C}(0,1)$. Incluye la estimación de $(c,C)$, el barrido, las métricas del modelo elegido, las curvas de entrenamiento, el símbolo aprendido frente a $|k|^2$ y la certificación de las Def. 2.3 y 2.1.
-- **`03_barrido_grf`:** el mismo flujo con los datos del paper. Es el calor en $\mathbb T^1$ con resolución 1024 y $u_0\sim\mathcal N(0,7^4(-\Delta+7^2)^{-2.5})$:
+- **`01_exploracion`:** los símbolos $|k|^\alpha$, los datos GRF (generación, tiempos y $k_{\text{cap}}$) y los verificadores `ParabolicityVerifier` y `SymbolClassVerifier` sobre el calor, el laplaciano fraccionario y símbolos que no son parabólicos.
+- **`02_calor_1d`:** el flujo completo con los datos del paper: calor en $\mathbb T^1$, resolución 1024 y $u_0\sim\mathcal N(0,7^4(-\Delta+7^2)^{-2.5})$.
   - **Entrenamiento:** 100 condiciones iniciales en $t=0.05+0.1j$.
   - **Prueba:** 20 condiciones iniciales nuevas en $t=0.05+0.05j$.
-  - Se descartan los pares $(k,t)$ con $e^{-ta(k)}\le\varepsilon_{\texttt{float32}}$, lo que deja $|k|\le17$.
-  - Reporta el error relativo $L^2$ en prueba, también en espacio físico.
+  - Incluye la estimación de $(c,C)$ y $C_\alpha$, el barrido, las métricas del modelo elegido, el error relativo $L^2$ en prueba (también en espacio físico), las curvas de entrenamiento, el símbolo aprendido frente a $|k|^2$ y la certificación de las Def. 2.3 y 2.1.
+- **`03_calor_2d`:** el mismo flujo en $\mathbb T^2$ (malla $128\times128$, $k_{\text{cap}}=32$), con `GRFExperiment`.
+- **`04_fraccionario_1d`** y **`05_fraccionario_2d`:** referencia $a(k)=|k|^\alpha$ con $m=\alpha\in\{0.5,1,1.5\}$, en $\mathbb T^1$ ($k_{\text{cap}}=64$) y $\mathbb T^2$ ($k_{\text{cap}}=32$); una sección por $\alpha$ y una tabla resumen.
 
 ## Instalación
 
@@ -149,4 +154,4 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Los notebooks importan `parabolic_symbol` como paquete instalado y se ejecutan desde `notebooks/`. Usan GPU y `float32` si hay CUDA; si no, CPU y `float64`. El notebook `03` exige CUDA. Para el libro: `cd book && jupyter book start`.
+Los notebooks importan `parabolic_symbol` como paquete instalado y se ejecutan desde `notebooks/`. Usan GPU y `float32` si hay CUDA; si no, CPU y `float64`. El notebook `02` exige CUDA. Para el libro: `cd book && jupyter book start`.

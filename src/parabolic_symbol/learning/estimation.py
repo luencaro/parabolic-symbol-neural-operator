@@ -25,7 +25,7 @@ import numpy as np
 
 from ..symbol import Symbol
 from ..verification.symbol_class import SymbolClassVerifier
-from ..data.synthetic import k_grid
+from ..data.grids import k_grid
 from ..utils import Split, bracket, multi_indices
 
 ClassConstantsDict = Dict[Tuple[int, ...], float]
@@ -83,9 +83,9 @@ def estimate_symbol(
 
         a_hat(k) = - sum_i w_i t_i y_i / sum_i w_i t_i^2.
 
-    Mascara de recuperabilidad: se descartan los pares con |u| <= tol |u0|,
-    porque exp(-t a(k)) puede caer por debajo de la precision de maquina y el
-    log deja de medir a(k). Un k sin ningun par recuperable no se estima.
+    Filtro de senal: se descartan los pares con |u| <= tol |u0|, porque
+    log|u/u0| no tiene sentido cuando u es cero o ruido de redondeo. Un k sin
+    ningun par con senal no se estima.
 
     Devuelve (k, a_hat): k de forma (K, n) (los k unicos con algun par util) y
     a_hat de forma (K,). Con `verbose`, imprime la ventana de k usada y cuantos
@@ -97,7 +97,7 @@ def estimate_symbol(
     u = np.abs(train_data["u_ref"].detach().cpu().numpy())
 
     n_k_total = len(np.unique(k, axis=0))
-    keep = (u0 > 0) & (u > tol * u0)
+    keep = (u0 > 0) & (u > tol * u0)   # filtro de senal
     k, t, u0, u = k[keep], t[keep], u0[keep], u[keep]
 
     y = np.log(u) - np.log(u0)
@@ -111,7 +111,7 @@ def estimate_symbol(
     if verbose:
         print(
             f"estimate_symbol: {int(keep.sum()):,} de {len(keep):,} pares (k, t) "
-            f"recuperables (tol={tol:g}); {len(k_unique)} de {n_k_total} k de entrenamiento"
+            f"con senal (tol={tol:g}); {len(k_unique)} de {n_k_total} k de entrenamiento"
         )
         print(f"  ventana usada: {k_window(k_unique)}")
     return k_unique, a_hat
@@ -196,8 +196,9 @@ def class_constants_with_margin(
 
 
 def estimate_class_constants(
-    k: np.ndarray, a_hat: np.ndarray, m: float, rho: int, margin: float = 1.5
-) -> ClassConstantsDict:
+    k: np.ndarray, a_hat: np.ndarray, m: float, rho: int, margin: float = 1.5,
+    return_counts: bool = False,
+) -> Union[ClassConstantsDict, Tuple[ClassConstantsDict, Dict[Tuple[int, ...], int]]]:
     """C_alpha de la Def. 2.1 desde a_hat, por diferencias finitas hacia adelante.
 
         C_alpha_hat = max_k <k>^{|alpha| - m} |Delta^alpha a_hat(k)|,
@@ -206,12 +207,16 @@ def estimate_class_constants(
     completo esta en el conjunto (la particion por k deja huecos, asi que no se
     usan todos los k). Despues se aplican el piso y el margen de
     `class_constants_with_margin`.
+
+    Con `return_counts=True` devuelve ademas {alpha: numero de k de
+    entrenamiento con el estencil completo}, es decir, los k que entran al max.
     """
     k = np.asarray(k, dtype=float)
     n = k.shape[1]
     valores = {tuple(row): float(np.real(a)) for row, a in zip(k.astype(int), a_hat)}
     corchetes = bracket(k)
     C_raw: ClassConstantsDict = {}
+    conteos: Dict[Tuple[int, ...], int] = {}
     for alpha in multi_indices(n, rho):
         orden = sum(alpha)
         mejor = 0.0
@@ -234,7 +239,9 @@ def estimate_class_constants(
         if usados == 0:
             raise ValueError(f"ningun k de entrenamiento tiene el estencil completo para alpha={alpha}")
         C_raw[alpha] = mejor
-    return class_constants_with_margin(C_raw, margin)
+        conteos[alpha] = usados
+    C = class_constants_with_margin(C_raw, margin)
+    return (C, conteos) if return_counts else C
 
 
 def oracle_class_constants(

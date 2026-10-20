@@ -1,0 +1,4 @@
+K,region,puntos,max_ratio,satisfecha
+64,dentro,80625,0.6535799285450181,True
+128,fuera,160625,0.6535799285450181,True
+192,fuera,240625,0.6535799285450181,True
