@@ -20,6 +20,17 @@ todas sus derivadas sobre esa bola, y <k>^m esta en S^m; el producto esta en
 S^m. Fijar a_theta(0) = 0 cambia un solo punto, y eso solo altera finitas
 diferencias Delta^alpha. La pertenencia esta garantizada cualitativamente, pero
 las constantes C_alpha dependen de theta: las controla L_class.
+
+Version par (`even=True`, la que usa el PDNO):
+
+    a_par(k) = (a_theta(k) + a_theta(-k)) / 2
+             = <k>^m ( c + (C - c) (sigma(g_theta(x)) + sigma(g_theta(-x))) / 2 ).
+
+El promedio sigue en la banda (c, C), asi que vale el mismo kappa de
+`theoretical_kappa`, y sigue en S^m. Un multiplicador real que lleva funciones
+reales en funciones reales tiene que ser par; con rfftn / irfftn, ademas, un
+a_theta no par haria que el simbolo efectivo cambiara de rama en la costura del
+medio espacio (k_n = 0) y saliera de S^{m,rho}.
 """
 from __future__ import annotations
 
@@ -58,6 +69,12 @@ class ParabolicMLPSymbol(Symbol):
         En que capas ocultas se aplica ese dropout (ver DROPOUT_PLACEMENTS).
     device, dtype : torch
         Donde y con que precision vive la red. Por defecto GPU si esta disponible.
+    even : bool
+        Si True, el simbolo es a_par(k) = (a_theta(k) + a_theta(-k)) / 2: todo
+        (`band`, `forward`, `evaluate_batch` y por tanto L_par, L_class y los
+        verificadores) ve a_par. Por defecto False (el simbolo de siempre). En
+        modo train con dropout, k y -k llevan mascaras distintas, asi que la
+        paridad es exacta solo sin dropout o en modo eval.
     """
 
     def __init__(
@@ -73,6 +90,7 @@ class ParabolicMLPSymbol(Symbol):
         seed: Optional[int] = None,
         device: Optional[torch.device] = None,
         dtype: torch.dtype = torch.float64,
+        even: bool = False,
     ) -> None:
         if not m > 0:
             raise ValueError(f"el orden m debe ser > 0: {m}")
@@ -94,6 +112,7 @@ class ParabolicMLPSymbol(Symbol):
             dim=1,
             name=(
                 f"ParabolicMLPSymbol(c={c:.4g}, C={C:.4g}, hidden={hidden}, "
+                + ("par, " if even else "")
                 + (
                     f"dropout={dropout} en capas ocultas {indices})"
                     if indices and dropout > 0.0
@@ -109,6 +128,7 @@ class ParabolicMLPSymbol(Symbol):
         self.dropout = float(dropout)
         self.dropout_layers = indices
         self.hidden = hidden
+        self.even = bool(even)
         self.device = torch.device(device) if device is not None else default_device()
         self.dtype = dtype
 
@@ -143,12 +163,18 @@ class ParabolicMLPSymbol(Symbol):
         """h_theta(k) = c + (C - c) sigma(g_theta(k/<k>)), en (c, C); forma (batch,).
 
         Se define tambien en k = 0 (vale lo que diga la red en x = 0); el modo
-        cero lo anula `forward`.
+        cero lo anula `forward`. Con `even`, es el promedio sobre k y -k,
+        (h_theta(k) + h_theta(-k)) / 2, con x y -x en un solo lote de la red.
         """
         k = k.to(device=self.device, dtype=self.dtype)
         bracket = torch.sqrt(1.0 + torch.sum(k**2, dim=1, keepdim=True))
-        g = self.net(k / bracket)[:, 0]
-        return self.c + (self.C - self.c) * torch.sigmoid(g)
+        x = k / bracket
+        if self.even:
+            s = torch.sigmoid(self.net(torch.cat([x, -x]))[:, 0])
+            s = 0.5 * (s[: len(x)] + s[len(x) :])
+        else:
+            s = torch.sigmoid(self.net(x)[:, 0])
+        return self.c + (self.C - self.c) * s
 
     def forward(self, k: torch.Tensor) -> torch.Tensor:
         """Version en torch, por lotes.

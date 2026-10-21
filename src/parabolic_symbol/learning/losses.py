@@ -5,6 +5,7 @@
              sobre Re(lambda) >= 0, |(k,lambda)| >= omega.
     L_class= E[ max(0, <k>^{|alpha| - m} |Delta^alpha a_theta(k)| - C_alpha)^2 ]
              sobre |alpha| <= rho (Def. 2.1).
+    L_rel  = E_b[ ||u_theta,b - u_b|| / ||u_b|| ]   (PDNO, espacio fisico, por muestra)
 """
 from __future__ import annotations
 
@@ -24,6 +25,17 @@ def trajectory_loss(symbol: LearnedSymbol, k, t, u0, u_ref) -> torch.Tensor:
     """MSE complejo: E[|exp(-t a_theta(k)) u0 - u_ref|^2]."""
     u_pred = torch.exp(-t * symbol.forward(k)) * u0
     return torch.mean(torch.abs(u_pred - u_ref) ** 2)
+
+
+def relative_l2_loss(pred: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+    """Error relativo L2 por muestra, promediado: E_b[ ||pred_b - ref_b|| / ||ref_b|| ].
+
+    pred, ref: campos reales de forma (B, *malla). En una malla uniforme el
+    cociente de normas discretas es el de las normas L2(T^n).
+    """
+    axes = tuple(range(1, pred.dim()))
+    error = torch.linalg.vector_norm(pred - ref, dim=axes)
+    return torch.mean(error / torch.linalg.vector_norm(ref, dim=axes))
 
 
 def phase_space_norm(k: torch.Tensor, lam: torch.Tensor, m: float) -> torch.Tensor:

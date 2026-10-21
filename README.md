@@ -89,6 +89,39 @@ Las combinaciones equivalentes se eliminan, así que quedan 30 entrenamientos. `
 - $|k_i|\le3k_{\max}$;
 - $|\lambda|\in[10^{-2},10^3]$ con 25 ángulos.
 
+## PDNO
+
+**Dónde:** [`src/parabolic_symbol/operators/`](src/parabolic_symbol/operators/). Es la arquitectura PDNO completa (Shin et al., 2024, ec. (1)), donde el núcleo de cada capa lo da un `ParabolicMLPSymbol`:
+
+$$v_0=P(u_0),\qquad v_{\ell+1}=\sigma\big(W_\ell v_\ell+K_\ell v_\ell+b_\ell\big),\qquad u(t)=Q(v_L),\qquad K_\ell v=\mathcal F^{-1}\big[e^{-\tau_\ell t\,a_{\text{par}}^{(\ell)}(k)}\,\mathcal F v\big].$$
+
+- **Símbolo par.** Cada capa tiene un símbolo escalar, aplicado a todos los canales: $a_{\text{par}}(k)=\tfrac12\big(a_\theta(k)+a_\theta(-k)\big)$, que es `ParabolicMLPSymbol(..., even=True)`.
+  - Sigue en la banda $(c,C)$, así que vale el mismo $\kappa$ teórico.
+  - Es par, como debe serlo un multiplicador real que lleva funciones reales en funciones reales.
+  - Se simetriza antes de exponenciar, y el multiplicador se aplica con `rfftn`/`irfftn` en todos los modos de la malla, sin truncar.
+  - $\mathcal L_{\text{par}}$, $\mathcal L_{\text{class}}$ y los reportes del símbolo se evalúan sobre $a_{\text{par}}$.
+- **Tiempo.** $t$ entra en el exponente. $\tau_\ell\ge0$, con $\sum_\ell\tau_\ell=1$, es la fracción del tiempo que avanza cada capa: por defecto $1/L$, o aprendida con softmax.
+- **Configuración (`PDNOConfig`).** Se eligen:
+  - el ancho $d$ y el número de capas $L$;
+  - si se usan $W$ y los sesgos;
+  - $\sigma\in\{$identidad, GELU, tanh$\}$;
+  - $P$ y $Q\in\{$identidad, lineal$\}$;
+  - $\tau$ fijo o aprendido.
+
+  Los valores por defecto son el caso del calor y del laplaciano fraccionario: $d=1$, sin $W$ ni sesgos, $\sigma=$ identidad y $P=Q=$ identidad. En ese caso la red es el semigrupo $e^{-t\bar a(D)}u_0$, con $\bar a=\sum_\ell\tau_\ell a_{\text{par}}^{(\ell)}$, que también está en la banda. Con $L=1$ es el modelo espectral, con $a_{\text{par}}$.
+- **Banda.** Todas las capas comparten la banda $(c,C)$, estimada con `estimate_bounds` sobre las condiciones iniciales de entrenamiento, y el orden $m$.
+- **Pérdida (`train_operator`).** Hay una sola pérdida total, con un solo optimizador:
+
+  $$\mathcal L=\mathbb E_b\frac{\|u_\theta(t_b)-u(t_b)\|_{L^2}}{\|u(t_b)\|_{L^2}}+\lambda_{\text{par}}\sum_\ell\mathcal L_{\text{par}}\big(a_{\text{par}}^{(\ell)}\big)+\lambda_{\text{class}}\sum_\ell\mathcal L_{\text{class}}\big(a_{\text{par}}^{(\ell)}\big).$$
+
+  La $L^2$ relativa se calcula en espacio físico, por muestra y promediada. Las $C_\alpha$ salen igual que en el modelo espectral.
+- **Datos (`data/fields.py`).** Son campos completos: $u_0$ de forma `(n_ic, *malla)` y $u$ de forma `(n_ic, T, *malla)`. Cada muestra es un par (condición inicial, $t$). La partición es por condición inicial:
+  - **validación:** condiciones iniciales nuevas en `TRAIN_TIMES`; se usa para el early stopping;
+  - **prueba:** las condiciones iniciales de prueba en `TEST_TIMES`;
+  - **extrapolación** (opcional): $t>0.95$; solo se reporta.
+
+El PDNO se construye directamente en GPU y en `float64`.
+
 ## Estructura
 
 ```
@@ -105,16 +138,23 @@ src/parabolic_symbol/
 ├── verification/                 # Defs. 2.1 y 2.3
 │   ├── parabolicity.py           # ParabolicityVerifier: estima kappa de la Def. 2.3
 │   └── symbol_class.py           # SymbolClassVerifier: estima C_alpha de la Def. 2.1
+├── operators/                    # PDNO (Shin et al., 2024, ec. (1))
+│   ├── config.py                 # PDNOConfig: d, L, W, sesgos, sigma, P, Q, tau
+│   ├── pdio.py                   # PDIO: K v = F^{-1}[exp(-tau t a_par(k)) F v]
+│   └── pdno.py                   # PDNO: la red global
 ├── data/
 │   ├── grids.py                  # rejillas y muestreo de k y (k, lambda), particion por k
-│   └── grf.py                    # datos GRF en T^n (paper, Sec. 5.1): calor y laplaciano fraccionario
+│   ├── grf.py                    # datos GRF en T^n (paper, Sec. 5.1): calor y laplaciano fraccionario
+│   └── fields.py                 # campos completos para el PDNO, particion por condicion inicial
 └── learning/
     ├── estimation.py             # a_hat(k), banda (c, C) y C_alpha desde los datos
-    ├── losses.py                 # L_traj, L_par, L_class
+    ├── losses.py                 # L_traj, L_par, L_class y L2 relativa del PDNO
     ├── training.py               # TrainingConfig y bucle de entrenamiento
     ├── evaluation.py             # metricas y peor ratio de parabolicidad
     ├── sweep.py                  # barrido de arquitecturas y seleccion
-    └── experiment.py             # GRFExperiment: el flujo completo de un notebook GRF
+    ├── experiment.py             # GRFExperiment: el flujo completo de un notebook GRF
+    ├── operator_training.py      # OperatorTrainingConfig y train_operator (PDNO)
+    └── operator_evaluation.py    # L2 relativa por (u0, t) y metricas por epoca del PDNO
 notebooks/
 ├── 01_exploracion.ipynb          # simbolos, datos GRF y verificadores (Defs. 2.1 y 2.3)
 ├── 02_calor_1d.ipynb             # barrido, prueba y certificacion: calor en T^1
