@@ -17,6 +17,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from ..symbol import Symbol
 from ..symbols.parabolic_mlp_symbol import ParabolicMLPSymbol
 from .config import PDNOConfig
 from .pdio import PDIO
@@ -129,3 +130,38 @@ class PDNO(nn.Module):
             raise ValueError("el simbolo efectivo solo existe en el caso lineal (config.is_semigroup)")
         tau = self.tau.detach().cpu().numpy()
         return tau @ self.layer_symbols(k)
+
+
+class EffectiveSymbol(Symbol):
+    """a_bar(k) = sum_l tau_l a_par^{(l)}(k) del PDNO lineal, como Symbol.
+
+    Sirve para pasar el simbolo efectivo a ParabolicityVerifier,
+    SymbolClassVerifier o `symbol_report`. Solo existe en el caso lineal
+    (config.is_semigroup). n, m y rho son los de las capas; como a_bar es una
+    combinacion convexa de simbolos en la banda (c, C), sigue en ella y vale el
+    mismo `theoretical_kappa`. Lee tau y los pesos del modelo en cada
+    evaluacion, asi que refleja el estado actual del modelo.
+    """
+
+    def __init__(self, model: PDNO) -> None:
+        if not model.config.is_semigroup:
+            raise ValueError("el simbolo efectivo solo existe en el caso lineal (config.is_semigroup)")
+        first = model.symbols[0]
+        super().__init__(
+            n=first.n, m=first.m, rho=first.rho, dim=1,
+            name=f"EffectiveSymbol(L={model.config.n_layers}, c={first.c:.4g}, C={first.C:.4g})",
+        )
+        self.model = model
+        self.c, self.C = first.c, first.C
+
+    def evaluate_batch(self, k: np.ndarray) -> np.ndarray:
+        """a_bar sobre un lote: k de forma (N, n) -> vector complejo (N,), en modo eval."""
+        k = np.asarray(k, dtype=float).reshape(-1, self.n)
+        return self.model.effective_symbol(k).astype(complex)
+
+    def evaluate(self, k: np.ndarray) -> np.ndarray:
+        """Interfaz de Symbol: k in Z^n -> matriz 1x1 compleja."""
+        return np.array([[self.evaluate_batch(k)[0]]], dtype=complex)
+
+    def theoretical_kappa(self, omega: float = 1.0) -> float:
+        return self.model.theoretical_kappa(omega)

@@ -120,6 +120,8 @@ $$v_0=P(u_0),\qquad v_{\ell+1}=\sigma\big(W_\ell v_\ell+K_\ell v_\ell+b_\ell\big
   - **prueba:** las condiciones iniciales de prueba en `TEST_TIMES`;
   - **extrapolación** (opcional): $t>0.95$; solo se reporta.
 
+- **Símbolo efectivo y modelo guardado.** `EffectiveSymbol(model)` expone $\bar a$ como un `Symbol`, así que se puede pasar a `ParabolicityVerifier` y a `SymbolClassVerifier`; solo existe en el caso lineal. `save_operator_model` escribe `modelo.pt`, y `load_operator_model` y `load_operator_datasets` reconstruyen el modelo y los datos sin el notebook.
+
 El PDNO se construye directamente en GPU y en `float64`.
 
 ## Estructura
@@ -141,7 +143,7 @@ src/parabolic_symbol/
 ├── operators/                    # PDNO (Shin et al., 2024, ec. (1))
 │   ├── config.py                 # PDNOConfig: d, L, W, sesgos, sigma, P, Q, tau
 │   ├── pdio.py                   # PDIO: K v = F^{-1}[exp(-tau t a_par(k)) F v]
-│   └── pdno.py                   # PDNO: la red global
+│   └── pdno.py                   # PDNO: la red global y EffectiveSymbol (caso lineal)
 ├── data/
 │   ├── grids.py                  # rejillas y muestreo de k y (k, lambda), particion por k
 │   ├── grf.py                    # datos GRF en T^n (paper, Sec. 5.1): calor y laplaciano fraccionario
@@ -153,19 +155,21 @@ src/parabolic_symbol/
     ├── evaluation.py             # metricas y peor ratio de parabolicidad
     ├── sweep.py                  # barrido de arquitecturas y seleccion
     ├── experiment.py             # GRFExperiment: el flujo completo de un notebook GRF
-    ├── operator_training.py      # OperatorTrainingConfig y train_operator (PDNO)
+    ├── operator_training.py      # OperatorTrainingConfig, train_operator y modelo.pt del PDNO
     └── operator_evaluation.py    # L2 relativa por (u0, t) y metricas por epoca del PDNO
 notebooks/
 ├── 01_exploracion.ipynb          # simbolos, datos GRF y verificadores (Defs. 2.1 y 2.3)
 ├── 02_calor_1d.ipynb             # barrido, prueba y certificacion: calor en T^1
 ├── 03_calor_2d.ipynb             # lo mismo en T^2
 ├── 04_fraccionario_1d.ipynb      # laplaciano fraccionario |k|^alpha en T^1, alpha in {0.5, 1, 1.5}
-└── 05_fraccionario_2d.ipynb      # lo mismo en T^2
+├── 05_fraccionario_2d.ipynb      # lo mismo en T^2
+└── 06_pdno_calor_1d.ipynb        # PDNO lineal en el calor en T^1
 results/                          # una carpeta por notebook: tablas CSV y figuras PNG
 ├── 02_calor_1d/
 ├── 03_calor_2d/
 ├── 04_fraccionario_1d/           # una subcarpeta por alpha y resumen.csv
-└── 05_fraccionario_2d/
+├── 05_fraccionario_2d/
+└── 06_pdno_calor_1d/
 book/myst.yml                     # Jupyter Book con los notebooks
 ```
 
@@ -178,6 +182,13 @@ book/myst.yml                     # Jupyter Book con los notebooks
   - Incluye la estimación de $(c,C)$ y $C_\alpha$, el barrido, las métricas del modelo elegido, el error relativo $L^2$ en prueba (también en espacio físico), las curvas de entrenamiento, el símbolo aprendido frente a $|k|^2$ y la certificación de las Def. 2.3 y 2.1.
 - **`03_calor_2d`:** el mismo flujo en $\mathbb T^2$ (malla $128\times128$, $k_{\text{cap}}=32$), con `GRFExperiment`.
 - **`04_fraccionario_1d`** y **`05_fraccionario_2d`:** referencia $a(k)=|k|^\alpha$ con $m=\alpha\in\{0.5,1,1.5\}$, en $\mathbb T^1$ ($k_{\text{cap}}=64$) y $\mathbb T^2$ ($k_{\text{cap}}=32$); una sección por $\alpha$ y una tabla resumen.
+
+- **`06_pdno_calor_1d`:** el PDNO en su configuración lineal, aplicado al calor en $\mathbb T^1$ con los mismos datos que `02`, pero partidos por condición inicial. Incluye:
+  - comprobaciones previas al entrenamiento (paridad, reducción al modelo espectral y semigrupo);
+  - el error relativo $L^2$ en prueba por tiempo;
+  - el símbolo efectivo frente a $|k|^2$ hasta Nyquist;
+  - la certificación de cada capa y del símbolo efectivo;
+  - la extrapolación temporal, opcional.
 
 ## Instalación
 

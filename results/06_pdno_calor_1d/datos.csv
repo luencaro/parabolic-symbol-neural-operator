@@ -1,0 +1,4 @@
+conjunto,condiciones_iniciales,tiempos,pares,t_min,t_max
+entrenamiento,80,10,800,0.05,0.9500000000000001
+validacion,20,10,200,0.05,0.9500000000000001
+prueba,20,20,400,0.05,1.0

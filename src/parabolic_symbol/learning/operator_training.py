@@ -10,20 +10,28 @@ se evaluan sobre el ParabolicMLPSymbol par de cada capa, con las funciones de
 MLP de los simbolos, W, b, P, Q y tau si se aprende). kappa =
 model.theoretical_kappa(omega), igual que en `train`; las C_alpha se resuelven
 con `resolve_class_constants`, igual que ahora.
+
+Modelo guardado: `save_operator_model` escribe modelo.pt con los pesos, la
+PDNOConfig, la OperatorTrainingConfig y lo necesario para regenerar los datos;
+`load_operator_model` reconstruye el PDNO y `load_operator_datasets` regenera
+los conjuntos con la misma semilla, sin el notebook.
 """
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, replace
-from typing import Dict, List, Optional
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Union
 
 import torch
 
 from ..symbol import Symbol
-from ..data.fields import FieldData
+from ..data.fields import FieldData, FieldDatasets, field_datasets
 from ..data.grids import sample_k_points, sample_phase_points
+from ..operators.config import PDNOConfig
 from ..operators.pdno import PDNO
 from .estimation import resolve_class_constants
+from .experiment import _build_reference, _dtype_name, _reference_spec
 from .losses import ClassConstants, class_loss, parabolicity_loss, relative_l2_loss
 from .operator_evaluation import OPERATOR_METRICS, evaluate_fields
 from ..utils import Split
@@ -223,4 +231,91 @@ def train_operator(
         epochs_run=epochs_run,
         stopped_early=stopped_early,
         class_C=class_C,
+    )
+
+
+# ----------------------------------------------------------------------
+# Modelo guardado (modelo.pt)
+# ----------------------------------------------------------------------
+OPERATOR_CHECKPOINT_FORMAT = 1
+
+
+def save_operator_model(
+    path: Union[str, Path],
+    model: PDNO,
+    *,
+    reference: Symbol,
+    resolution: int,
+    k_cap: int,
+    config: OperatorTrainingConfig,
+    result: Optional[OperatorTrainingResult] = None,
+    seed: int = 0,
+    val_fraction: float = 0.2,
+    extrapolation_times: Optional[Sequence[float]] = None,
+    delta: float = 0.1,
+    estimate_tol: float = 1e-10,
+) -> Path:
+    """Guarda el PDNO entrenado con torch.save, listo para reconstruirlo sin el notebook.
+
+    Contiene: el state_dict (pesos de las MLP de los simbolos, W, b, P, Q y
+    tau), la PDNOConfig (con la banda (c, C) y m), el dtype, los datos (simbolo
+    de referencia, semilla, resolucion, k_cap, val_fraction, tiempos de
+    extrapolacion), las constantes de la estimacion (delta, tol), la
+    OperatorTrainingConfig y, si se da `result`, la mejor epoca y las C_alpha
+    que se usaron. Todo son tipos simples: se lee con weights_only=True.
+    """
+    path = Path(path)
+    checkpoint = {
+        "formato": OPERATOR_CHECKPOINT_FORMAT,
+        "modelo": "PDNO",
+        "state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
+        "arquitectura": asdict(model.config),
+        "dtype": _dtype_name(model.dtype),
+        "datos": {
+            "referencia": _reference_spec(reference), "semilla": seed, "resolucion": resolution,
+            "k_cap": k_cap, "val_fraction": val_fraction,
+            "extrapolation_times": (
+                None if extrapolation_times is None else [float(t) for t in extrapolation_times]
+            ),
+        },
+        "experimento": {"delta": delta, "estimate_tol": estimate_tol},
+        "entrenamiento": asdict(replace(config, class_reference=None)),
+    }
+    if result is not None:
+        checkpoint["resultado"] = {
+            "mejor_epoca": result.best_epoch, "epocas": result.epochs_run,
+            "early_stopping": result.stopped_early, "val_total": result.best_val_total,
+            "class_C": result.class_C,
+        }
+    torch.save(checkpoint, path)
+    print(f"modelo guardado en {path}")
+    return path
+
+
+def load_operator_checkpoint(path: Union[str, Path]) -> Dict:
+    """El diccionario de modelo.pt (ver `save_operator_model`)."""
+    checkpoint = torch.load(Path(path), map_location="cpu", weights_only=True)
+    if checkpoint.get("formato") != OPERATOR_CHECKPOINT_FORMAT or checkpoint.get("modelo") != "PDNO":
+        raise ValueError(f"{path}: no es un modelo.pt de PDNO de formato {OPERATOR_CHECKPOINT_FORMAT}")
+    return checkpoint
+
+
+def load_operator_model(path: Union[str, Path], device: Optional[torch.device] = None) -> PDNO:
+    """Reconstruye el PDNO guardado en modelo.pt, en `device` y en modo eval."""
+    checkpoint = load_operator_checkpoint(path)
+    model = PDNO(
+        PDNOConfig(**checkpoint["arquitectura"]), device=device, dtype=getattr(torch, checkpoint["dtype"])
+    )
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return model
+
+
+def load_operator_datasets(path: Union[str, Path]) -> FieldDatasets:
+    """Regenera los conjuntos de modelo.pt con `field_datasets` (misma semilla, mismos datos)."""
+    datos = load_operator_checkpoint(path)["datos"]
+    return field_datasets(
+        _build_reference(datos["referencia"]), datos["resolucion"], datos["semilla"],
+        k_cap=datos["k_cap"], val_fraction=datos["val_fraction"],
+        extrapolation_times=datos["extrapolation_times"],
     )
