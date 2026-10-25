@@ -21,16 +21,23 @@ S^m. Fijar a_theta(0) = 0 cambia un solo punto, y eso solo altera finitas
 diferencias Delta^alpha. La pertenencia esta garantizada cualitativamente, pero
 las constantes C_alpha dependen de theta: las controla L_class.
 
-Version par (`even=True`, la que usa el PDNO):
+Version par (`even=True`, la que usa el PDNO): se simetriza g_theta, no a_theta,
 
-    a_par(k) = (a_theta(k) + a_theta(-k)) / 2
-             = <k>^m ( c + (C - c) (sigma(g_theta(x)) + sigma(g_theta(-x))) / 2 ).
+    g_par(x) = (g_theta(x) + g_theta(-x)) / 2      (parte par de g_theta)
+    a_par(k) = <k>^m ( c + (C - c) sigma(g_par(k/<k>)) )     para k != 0.
 
-El promedio sigue en la banda (c, C), asi que vale el mismo kappa de
-`theoretical_kappa`, y sigue en S^m. Un multiplicador real que lleva funciones
-reales en funciones reales tiene que ser par; con rfftn / irfftn, ademas, un
-a_theta no par haria que el simbolo efectivo cambiara de rama en la costura del
-medio espacio (k_n = 0) y saliera de S^{m,rho}.
+Como sigma esta en (0, 1), c <k>^m < a_par(k) < C <k>^m y vale el mismo kappa
+de `theoretical_kappa`; g_par es C^infinito y acotada con todas sus derivadas
+sobre la bola unidad, asi que a_par sigue en S^m. Se promedia antes de la
+sigmoide y no despues: con (sigma(g(x)) + sigma(g(-x))) / 2, la parte impar de
+g (que no controla ninguna perdida) puede saturar las dos sigmoides en sentidos
+opuestos, dejar el promedio en 1/2 y matar el gradiente. Con g_par, la parte
+impar no entra ni en la salida ni en los gradientes.
+
+Un multiplicador real que lleva funciones reales en funciones reales tiene que
+ser par; con rfftn / irfftn, ademas, un a_theta no par haria que el simbolo
+efectivo cambiara de rama en la costura del medio espacio (k_n = 0) y saliera
+de S^{m,rho}.
 """
 from __future__ import annotations
 
@@ -70,9 +77,10 @@ class ParabolicMLPSymbol(Symbol):
     device, dtype : torch
         Donde y con que precision vive la red. Por defecto GPU si esta disponible.
     even : bool
-        Si True, el simbolo es a_par(k) = (a_theta(k) + a_theta(-k)) / 2: todo
-        (`band`, `forward`, `evaluate_batch` y por tanto L_par, L_class y los
-        verificadores) ve a_par. Por defecto False (el simbolo de siempre). En
+        Si True, el simbolo es a_par(k) = <k>^m (c + (C - c) sigma(g_par(k/<k>))),
+        con g_par(x) = (g_theta(x) + g_theta(-x)) / 2 la parte par de g_theta:
+        todo (`band`, `forward`, `evaluate_batch` y por tanto L_par, L_class y
+        los verificadores) ve a_par. Por defecto False (el simbolo de siempre). En
         modo train con dropout, k y -k llevan mascaras distintas, asi que la
         paridad es exacta solo sin dropout o en modo eval.
     """
@@ -163,15 +171,17 @@ class ParabolicMLPSymbol(Symbol):
         """h_theta(k) = c + (C - c) sigma(g_theta(k/<k>)), en (c, C); forma (batch,).
 
         Se define tambien en k = 0 (vale lo que diga la red en x = 0); el modo
-        cero lo anula `forward`. Con `even`, es el promedio sobre k y -k,
-        (h_theta(k) + h_theta(-k)) / 2, con x y -x en un solo lote de la red.
+        cero lo anula `forward`. Con `even`, la sigmoide se aplica a la parte par
+        g_par(x) = (g_theta(x) + g_theta(-x)) / 2, con x y -x en un solo lote de
+        la red: se promedia antes de la sigmoide, asi la parte impar de g_theta
+        no puede saturarla (ver el docstring del modulo).
         """
         k = k.to(device=self.device, dtype=self.dtype)
         bracket = torch.sqrt(1.0 + torch.sum(k**2, dim=1, keepdim=True))
         x = k / bracket
         if self.even:
-            s = torch.sigmoid(self.net(torch.cat([x, -x]))[:, 0])
-            s = 0.5 * (s[: len(x)] + s[len(x) :])
+            g = self.net(torch.cat([x, -x]))[:, 0]
+            s = torch.sigmoid(0.5 * (g[: len(x)] + g[len(x) :]))
         else:
             s = torch.sigmoid(self.net(x)[:, 0])
         return self.c + (self.C - self.c) * s

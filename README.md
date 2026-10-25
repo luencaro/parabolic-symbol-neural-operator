@@ -95,8 +95,9 @@ Las combinaciones equivalentes se eliminan, así que quedan 30 entrenamientos. `
 
 $$v_0=P(u_0),\qquad v_{\ell+1}=\sigma\big(W_\ell v_\ell+K_\ell v_\ell+b_\ell\big),\qquad u(t)=Q(v_L),\qquad K_\ell v=\mathcal F^{-1}\big[e^{-\tau_\ell t\,a_{\text{par}}^{(\ell)}(k)}\,\mathcal F v\big].$$
 
-- **Símbolo par.** Cada capa tiene un símbolo escalar, aplicado a todos los canales: $a_{\text{par}}(k)=\tfrac12\big(a_\theta(k)+a_\theta(-k)\big)$, que es `ParabolicMLPSymbol(..., even=True)`.
-  - Sigue en la banda $(c,C)$, así que vale el mismo $\kappa$ teórico.
+- **Símbolo par.** Cada capa tiene un símbolo escalar, aplicado a todos los canales: $a_{\text{par}}(k)=\langle k\rangle^m\big(c+(C-c)\,\sigma(g_{\text{par}}(k/\langle k\rangle))\big)$, con $g_{\text{par}}(x)=\tfrac12\big(g_\theta(x)+g_\theta(-x)\big)$ la parte par de $g_\theta$. Es `ParabolicMLPSymbol(..., even=True)`.
+  - Sigue en la banda $(c,C)$, así que vale el mismo $\kappa$ teórico, y sigue en $S^m$, porque $g_{\text{par}}$ es $C^\infty$ y acotada con sus derivadas sobre la bola unidad.
+  - Se promedia antes de la sigmoide, no después. Con $\tfrac12\big(\sigma(g_\theta(x))+\sigma(g_\theta(-x))\big)$, la parte impar de $g_\theta$, que no controla ninguna pérdida, podría saturar las dos sigmoides en sentidos opuestos: el promedio quedaría en $1/2$ y el gradiente moriría. Con $g_{\text{par}}$, la parte impar no entra ni en la salida ni en los gradientes.
   - Es par, como debe serlo un multiplicador real que lleva funciones reales en funciones reales.
   - Se simetriza antes de exponenciar, y el multiplicador se aplica con `rfftn`/`irfftn` en todos los modos de la malla, sin truncar.
   - $\mathcal L_{\text{par}}$, $\mathcal L_{\text{class}}$ y los reportes del símbolo se evalúan sobre $a_{\text{par}}$.
