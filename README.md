@@ -157,6 +157,7 @@ src/parabolic_symbol/
     ├── sweep.py                  # barrido de arquitecturas y seleccion
     ├── experiment.py             # GRFExperiment: el flujo completo de un notebook GRF
     ├── operator_training.py      # OperatorTrainingConfig, train_operator y modelo.pt del PDNO
+    ├── operator_sweep.py         # barrido de la MLP del simbolo del PDNO (mismas combinaciones que sweep.py)
     └── operator_evaluation.py    # L2 relativa por (u0, t) y metricas por epoca del PDNO
 notebooks/
 ├── 01_exploracion.ipynb          # simbolos, datos GRF y verificadores (Defs. 2.1 y 2.3)
@@ -186,6 +187,7 @@ book/myst.yml                     # Jupyter Book con los notebooks
 
 - **`06_pdno_calor_1d`:** el PDNO en su configuración lineal, aplicado al calor en $\mathbb T^1$ con los mismos datos que `02`, pero partidos por condición inicial. Incluye:
   - comprobaciones previas al entrenamiento (paridad, reducción al modelo espectral y semigrupo);
+  - el barrido de la MLP del símbolo, el mismo de `02` (30 corridas, con la arquitectura del PDNO fija), y la selección por menor $L^2$ relativa de validación;
   - el error relativo $L^2$ en prueba por tiempo;
   - el símbolo efectivo frente a $|k|^2$ hasta Nyquist;
   - la certificación de cada capa y del símbolo efectivo;

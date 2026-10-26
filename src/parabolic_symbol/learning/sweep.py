@@ -3,6 +3,8 @@
 kappa no se barre: la Def. 2.3 se cumple por construccion con
 kappa = theoretical_kappa(omega), y ese es el kappa de L_par en cada corrida.
 `best_run` elige la corrida de menor error relativo de validacion.
+`sweep_combinations` genera las combinaciones (tambien la usa el barrido del
+PDNO, `operator_sweep.py`).
 """
 from __future__ import annotations
 
@@ -50,6 +52,33 @@ class SweepRun:
         return f"ON p={self.dropout_rate:g} capas[{capas}]"
 
 
+def sweep_combinations(
+    depths: Sequence[int],
+    widths: Sequence[int],
+    dropout_layers: Sequence[DropoutPlacement],
+    weight_decays: Sequence[float],
+) -> List[Tuple[int, int, DropoutPlacement, Tuple[int, ...], float]]:
+    """Combinaciones (capas, ancho, ubicacion, indices, weight_decay) del barrido.
+
+    Producto cartesiano de los ejes, en ese orden, sin las combinaciones que
+    resuelven a las mismas capas de dropout (p. ej. "middle" con 2 capas ocultas
+    no deja ninguna capa interior y equivale a "none"); `indices` son las capas
+    ocultas que efectivamente llevan dropout.
+    """
+    combos = []
+    seen = set()
+    for n_layers, width, placement, weight_decay in itertools.product(
+        depths, widths, dropout_layers, weight_decays
+    ):
+        indices = dropout_layer_indices(placement, n_layers)
+        key = (n_layers, width, indices, weight_decay)
+        if key in seen:
+            continue
+        seen.add(key)
+        combos.append((n_layers, width, placement, indices, weight_decay))
+    return combos
+
+
 def run_sweep(
     train_data: Split,
     val_data: Split,
@@ -80,17 +109,7 @@ def run_sweep(
 
     # Se materializan las combinaciones antes de entrenar (deduplicando las que
     # resuelven a las mismas capas de dropout) solo para poder imprimir [i/total].
-    combos = []
-    seen = set()
-    for n_layers, width, placement, weight_decay in itertools.product(
-        depths, widths, dropout_layers, weight_decays
-    ):
-        indices = dropout_layer_indices(placement, n_layers)
-        key = (n_layers, width, indices, weight_decay)
-        if key in seen:
-            continue
-        seen.add(key)
-        combos.append((n_layers, width, placement, indices, weight_decay))
+    combos = sweep_combinations(depths, widths, dropout_layers, weight_decays)
 
     total = len(combos)
     for i, (n_layers, width, placement, indices, weight_decay) in enumerate(combos, 1):
