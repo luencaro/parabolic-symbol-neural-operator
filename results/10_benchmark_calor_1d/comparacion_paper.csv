@@ -1,0 +1,5 @@
+modelo,conjunto,condiciones_iniciales,tiempos,rel_l2_media,rel_l2_max,umbral_paper,media_bajo_umbral
+PDNO,entrenamiento,80,10,5.7670088e-05,0.0020799616,0.01,True
+PDNO,prueba,20,20,2.997372e-05,0.00090850453,0.01,True
+FNO,entrenamiento,80,10,0.024392623,0.19797893,0.01,False
+FNO,prueba,20,20,0.019630486,0.06502495,0.01,False

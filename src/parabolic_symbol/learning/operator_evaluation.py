@@ -27,7 +27,9 @@ OPERATOR_METRICS = ("total", "rel_l2", "parabolicity", "class", "par_max_ratio",
 def pair_errors(model: PDNO, data: FieldData, batch_size: int = 64) -> torch.Tensor:
     """Error relativo L2 de cada muestra, en el orden plano p = i T + j; forma (n_pairs,).
 
-    Usa el modo en que este el modelo; los lotes se mueven al device del modelo.
+    Usa el modo en que este el modelo; los lotes se mueven al device y dtype
+    del modelo. Sirve para cualquier modelo con forward(u0, t), `device` y
+    `dtype` (p. ej. FNOBaseline), no solo el PDNO.
     """
     errors = []
     for start in range(0, data.n_pairs, batch_size):

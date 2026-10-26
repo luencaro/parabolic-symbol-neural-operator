@@ -23,6 +23,12 @@ La misma convencion fija el campo aleatorio: -Delta tiene simbolo |k|^2.
 - El exponente de la covarianza se llama `decay` (2.5 por defecto) para no
   confundirlo con el alpha del laplaciano fraccionario; las funciones aceptan
   todavia `alpha=` como nombre antiguo.
+- Convencion del paper base: T = [0, 1), autovalores de -Delta 4 pi^2 xi^2 y
+  autofunciones e^{2 pi i x xi} de norma 1. Con x = 2 pi y es el campo del repo
+  con `freq_scale` = 4 pi^2 (sigma_k^2 = tau^4 (freq_scale |k|^2 + tau^2)^{-decay})
+  y `amplitude` = sqrt(2 pi), que cancela el 1 / sqrt(2 pi) de e_k:
+  u0_hat(k) = amplitude sigma_k xi_k / sqrt(2 pi). Por defecto ambos valen 1
+  (la convencion del repo, con exactamente los mismos numeros de siempre).
 
 `split` de cada conjunto tiene claves k, t, u0, u_ref, con una fila por
 condicion inicial y par (k, t), el formato de `split_trajectory_data`,
@@ -90,11 +96,20 @@ def _decay(decay: float, alpha: Optional[float]) -> float:
 
 
 def grf_variance(
-    k: np.ndarray, tau: float = 7.0, decay: float = 2.5, *, alpha: Optional[float] = None
+    k: np.ndarray,
+    tau: float = 7.0,
+    decay: float = 2.5,
+    *,
+    freq_scale: float = 1.0,
+    alpha: Optional[float] = None,
 ) -> np.ndarray:
-    """sigma_k^2 = tau^4 (|k|^2 + tau^2)^{-decay}, autovalores de tau^4 (-Delta + tau^2)^{-decay}."""
+    """sigma_k^2 = tau^4 (freq_scale |k|^2 + tau^2)^{-decay}, autovalores de tau^4 (-Delta + tau^2)^{-decay}.
+
+    `freq_scale` es el factor de los autovalores de -Delta: 1 en la convencion
+    del repo, 4 pi^2 en la del paper (ver el docstring del modulo).
+    """
     decay = _decay(decay, alpha)
-    return tau**4 * (np.asarray(k, dtype=float) ** 2 + tau**2) ** (-decay)
+    return tau**4 * (freq_scale * np.asarray(k, dtype=float) ** 2 + tau**2) ** (-decay)
 
 
 def sample_grf(
@@ -104,17 +119,21 @@ def sample_grf(
     tau: float = 7.0,
     decay: float = 2.5,
     *,
+    freq_scale: float = 1.0,
+    amplitude: float = 1.0,
     alpha: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Muestras reales de u0 en la malla x_j = 2 pi j / resolution.
 
     Devuelve (u0, u0_hat): u0 real de forma (n_samples, resolution) y sus
     coeficientes u0_hat(k) = fft(u0) / resolution, en el orden de np.fft.
+    `freq_scale` y `amplitude`: ver el docstring del modulo.
     """
     if resolution % 2:
         raise ValueError(f"la resolucion debe ser par: {resolution}")
     k_half = np.arange(resolution // 2 + 1)            # 0..Nyquist (rfft)
-    sigma = np.sqrt(grf_variance(k_half, tau, _decay(decay, alpha)) / (2.0 * np.pi))
+    variance = grf_variance(k_half, tau, _decay(decay, alpha), freq_scale=freq_scale)
+    sigma = amplitude * np.sqrt(variance / (2.0 * np.pi))
     xi = (
         rng.standard_normal((n_samples, len(k_half)))
         + 1j * rng.standard_normal((n_samples, len(k_half)))
@@ -144,6 +163,8 @@ def sample_grf_nd(
     tau: float = 7.0,
     decay: float = 2.5,
     *,
+    freq_scale: float = 1.0,
+    amplitude: float = 1.0,
     alpha: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Muestras reales de u0 ~ N(0, tau^4 (-Delta + tau^2)^{-decay}) en T^n = [0, 2 pi)^n.
@@ -158,7 +179,8 @@ def sample_grf_nd(
     Devuelve (u0, u0_hat): u0 de forma (n_samples,) + (resolution,) * n y
     u0_hat(k) = rfftn(u0) / resolution^n en el layout de `grf_wavenumbers`.
     u(x) = sum_k u_hat(k) e^{i k.x} se recupera con
-    resolution^n * irfftn(u_hat, s=(resolution,) * n).
+    resolution^n * irfftn(u_hat, s=(resolution,) * n). `freq_scale` y
+    `amplitude`: ver el docstring del modulo.
     """
     if resolution % 2:
         raise ValueError(f"la resolucion debe ser par: {resolution}")
@@ -168,7 +190,8 @@ def sample_grf_nd(
     axes = tuple(range(-n, 0))
     xi = np.fft.rfftn(rng.standard_normal((n_samples,) + shape), axes=axes) / resolution ** (n / 2)
     k_norm = np.linalg.norm(grf_wavenumbers(resolution, n), axis=-1)
-    u0_hat = np.sqrt(grf_variance(k_norm, tau, _decay(decay, alpha))) / (2.0 * np.pi) ** (n / 2) * xi
+    variance = grf_variance(k_norm, tau, _decay(decay, alpha), freq_scale=freq_scale)
+    u0_hat = amplitude * np.sqrt(variance) / (2.0 * np.pi) ** (n / 2) * xi
     u0 = resolution**n * np.fft.irfftn(u0_hat, s=shape, axes=axes)
     return u0, u0_hat
 
@@ -184,6 +207,8 @@ def make_grf_data(
     verbose: bool = True,
     *,
     k_cap: int,
+    freq_scale: float = 1.0,
+    amplitude: float = 1.0,
     alpha: Optional[float] = None,
 ) -> GRFData:
     """n_ic condiciones iniciales GRF en T^n evolucionadas con el simbolo `reference`.
@@ -192,7 +217,8 @@ def make_grf_data(
     en n >= 2, `sample_grf_nd` (layout de `grf_wavenumbers`). El split tiene
     todos los pares (k, t) con |k|_inf <= k_cap (obligatorio, < resolution / 2).
     Los tensores del split se guardan en float64 / complex128, con k de forma
-    (filas, n); `train` los pasa al dtype del modelo.
+    (filas, n); `train` los pasa al dtype del modelo. `freq_scale` y
+    `amplitude` son los del campo aleatorio (ver el docstring del modulo).
     """
     n = reference.n
     if not 0 <= k_cap < resolution // 2:
@@ -200,10 +226,14 @@ def make_grf_data(
     decay = _decay(decay, alpha)
     rng = np.random.default_rng(seed)
     if n == 1:
-        _, u0_hat = sample_grf(n_ic, resolution, rng, tau, decay)
+        _, u0_hat = sample_grf(
+            n_ic, resolution, rng, tau, decay, freq_scale=freq_scale, amplitude=amplitude
+        )
         k = np.rint(np.fft.fftfreq(resolution, d=1.0 / resolution)).astype(int)[:, None]
     else:
-        _, u0_hat = sample_grf_nd(n_ic, resolution, n, rng, tau, decay)
+        _, u0_hat = sample_grf_nd(
+            n_ic, resolution, n, rng, tau, decay, freq_scale=freq_scale, amplitude=amplitude
+        )
         k = grf_wavenumbers(resolution, n).reshape(-1, n).astype(int)
         u0_hat = u0_hat.reshape(n_ic, -1)
     a = symbol_values(reference, k)
@@ -247,22 +277,26 @@ def grf_datasets(
     k_cap: int,
     tau: float = 7.0,
     decay: float = 2.5,
+    freq_scale: float = 1.0,
+    amplitude: float = 1.0,
 ) -> Tuple[GRFData, GRFData]:
     """Entrenamiento (100 u0, TRAIN_TIMES) y prueba (20 u0 nuevas, TEST_TIMES).
 
     Las condiciones iniciales de prueba salen de un flujo aleatorio distinto
     (SeedSequence.spawn), asi que nunca coinciden con las de entrenamiento.
+    `freq_scale` y `amplitude`: ver el docstring del modulo.
     """
     seed_train, seed_test = np.random.SeedSequence(seed).spawn(2)
+    field = dict(k_cap=k_cap, freq_scale=freq_scale, amplitude=amplitude)
     print("ENTRENAMIENTO")
     train = make_grf_data(
         reference, 100, TRAIN_TIMES, resolution,
-        np.random.default_rng(seed_train).integers(2**32), tau, decay, k_cap=k_cap,
+        np.random.default_rng(seed_train).integers(2**32), tau, decay, **field,
     )
     print("PRUEBA")
     test = make_grf_data(
         reference, 20, TEST_TIMES, resolution,
-        np.random.default_rng(seed_test).integers(2**32), tau, decay, k_cap=k_cap,
+        np.random.default_rng(seed_test).integers(2**32), tau, decay, **field,
     )
     return train, test
 

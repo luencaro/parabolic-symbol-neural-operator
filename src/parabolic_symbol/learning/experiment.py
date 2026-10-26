@@ -107,7 +107,7 @@ REFERENCE_SYMBOLS = {"HeatSymbol": HeatSymbol, "FractionalLaplacianSymbol": Frac
 def _reference_spec(reference: Symbol) -> Dict:
     """Clase y argumentos del simbolo de referencia, para reconstruirlo."""
     if isinstance(reference, HeatSymbol):
-        return {"clase": "HeatSymbol", "kwargs": {"n": reference.n}}
+        return {"clase": "HeatSymbol", "kwargs": {"n": reference.n, "diffusivity": reference.diffusivity}}
     if isinstance(reference, FractionalLaplacianSymbol):
         return {"clase": "FractionalLaplacianSymbol",
                 "kwargs": {"n": reference.n, "alpha": float(reference.alpha), "rho": reference.rho}}

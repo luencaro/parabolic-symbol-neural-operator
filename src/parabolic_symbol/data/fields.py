@@ -18,6 +18,9 @@ mismo conjunto.
   solo se reporta.
 La banda (c, C) y las C_alpha salen de las filas espectrales (k, t, u0, u_ref)
 de las u0 de entrenamiento (`ic_rows`), en el formato de siempre.
+
+`resample_fields` lleva un FieldData 1D a otra malla (submuestreo o relleno con
+ceros del espectro) para evaluar la invariancia de resolucion.
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ import torch
 
 from ..symbol import Symbol
 from .grf import GRFData, grf_datasets
+from .grids import to_device
 from ..utils import Split
 
 
@@ -86,6 +90,19 @@ class FieldDatasets:
     grf_train: GRFData
     grf_test: GRFData
 
+    def to(self, device: torch.device, dtype: torch.dtype) -> "FieldDatasets":
+        """Campos y filas espectrales en `device` / `dtype` (complejo asociado en las filas).
+
+        Los GRFData (numpy, float64) no cambian.
+        """
+        return FieldDatasets(
+            train=self.train.to(device, dtype), val=self.val.to(device, dtype),
+            test=self.test.to(device, dtype),
+            extrapolation=None if self.extrapolation is None else self.extrapolation.to(device, dtype),
+            rows_train=to_device(self.rows_train, device, dtype),
+            grf_train=self.grf_train, grf_test=self.grf_test,
+        )
+
 
 def grf_fields(
     data: GRFData, ic: Optional[Sequence[int]] = None, times: Optional[Sequence[float]] = None
@@ -137,15 +154,19 @@ def field_datasets(
     extrapolation_times: Optional[Sequence[float]] = None,
     tau: float = 7.0,
     decay: float = 2.5,
+    freq_scale: float = 1.0,
+    amplitude: float = 1.0,
 ) -> FieldDatasets:
     """Entrenamiento, validacion, prueba y (opcional) extrapolacion como campos completos.
 
     Los datos son los de `grf_datasets` con la misma semilla. `k_cap` solo fija
     las filas espectrales con que se estiman la banda y las C_alpha; los campos
     tienen todos los modos. `extrapolation_times` debe ser > max(TRAIN_TIMES).
+    `freq_scale` y `amplitude` son los del campo aleatorio (ver `data/grf.py`).
     """
     grf_train, grf_test = grf_datasets(
-        reference, resolution, seed, k_cap=k_cap, tau=tau, decay=decay
+        reference, resolution, seed, k_cap=k_cap, tau=tau, decay=decay,
+        freq_scale=freq_scale, amplitude=amplitude,
     )
     train_ic, val_ic = split_by_ic(grf_train.u0_hat.shape[0], val_fraction, seed)
     extrapolation = None
@@ -172,3 +193,45 @@ def field_datasets(
             print(f"  {name:13s}: {data.n_ic} u0 x {data.n_times} tiempos = {data.n_pairs} pares, "
                   f"malla {tuple(data.u0.shape[1:])}")
     return datasets
+
+
+def _zero_pad_spectrum(u: torch.Tensor, resolution: int) -> torch.Tensor:
+    """El polinomio trigonometrico de u (ultimo eje) evaluado en una malla mas fina.
+
+    Los modos nuevos valen 0. El de Nyquist de la malla gruesa (real) se
+    interpreta como coseno: se reparte a la mitad entre +R/2 y -R/2.
+    """
+    R = u.shape[-1]
+    u_hat = torch.fft.rfft(u, dim=-1) / R
+    u_hat[..., R // 2] = u_hat[..., R // 2] / 2
+    padded = torch.zeros(u.shape[:-1] + (resolution // 2 + 1,), dtype=u_hat.dtype, device=u.device)
+    padded[..., : R // 2 + 1] = u_hat
+    return resolution * torch.fft.irfft(padded, n=resolution, dim=-1)
+
+
+def resample_fields(data: FieldData, resolution: int) -> FieldData:
+    """Los campos u0 y u(t) de `data` (n = 1) en una malla de `resolution` puntos.
+
+    - resolution < data.resolution (debe dividirla): submuestreo, los valores
+      exactos de las mismas funciones en la malla gruesa. Los modos por encima
+      del Nyquist grueso se pliegan (aliasing); con el decaimiento del GRF son
+      despreciables.
+    - resolution > data.resolution (par): relleno con ceros del espectro de
+      u0 y de u(t). Como exp(-t a(D)) es diagonal y los modos nuevos valen 0,
+      es la solucion exacta de la misma u0 en la malla fina.
+    """
+    if data.n != 1:
+        raise ValueError(f"resample_fields solo esta implementado en n = 1: n = {data.n}")
+    R = data.resolution
+    if resolution == R:
+        return data
+    if resolution < R:
+        if R % resolution:
+            raise ValueError(f"la resolucion {resolution} debe dividir a {R}")
+        step = R // resolution
+        u0, u = data.u0[..., ::step].clone(), data.u[..., ::step].clone()
+    else:
+        if resolution % 2:
+            raise ValueError(f"la resolucion debe ser par: {resolution}")
+        u0, u = _zero_pad_spectrum(data.u0, resolution), _zero_pad_spectrum(data.u, resolution)
+    return FieldData(u0=u0, u=u, t=data.t, ic=data.ic)

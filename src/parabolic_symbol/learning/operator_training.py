@@ -240,6 +240,27 @@ def train_operator(
 OPERATOR_CHECKPOINT_FORMAT = 1
 
 
+def _data_spec(
+    reference: Symbol,
+    resolution: int,
+    k_cap: int,
+    seed: int,
+    val_fraction: float,
+    extrapolation_times: Optional[Sequence[float]],
+    freq_scale: float,
+    amplitude: float,
+) -> Dict:
+    """La entrada "datos" de un modelo.pt: lo necesario para regenerar los conjuntos con `field_datasets`."""
+    return {
+        "referencia": _reference_spec(reference), "semilla": seed, "resolucion": resolution,
+        "k_cap": k_cap, "val_fraction": val_fraction,
+        "extrapolation_times": (
+            None if extrapolation_times is None else [float(t) for t in extrapolation_times]
+        ),
+        "freq_scale": float(freq_scale), "amplitude": float(amplitude),
+    }
+
+
 def save_operator_model(
     path: Union[str, Path],
     model: PDNO,
@@ -254,13 +275,15 @@ def save_operator_model(
     extrapolation_times: Optional[Sequence[float]] = None,
     delta: float = 0.1,
     estimate_tol: float = 1e-10,
+    freq_scale: float = 1.0,
+    amplitude: float = 1.0,
 ) -> Path:
     """Guarda el PDNO entrenado con torch.save, listo para reconstruirlo sin el notebook.
 
     Contiene: el state_dict (pesos de las MLP de los simbolos, W, b, P, Q y
     tau), la PDNOConfig (con la banda (c, C) y m), el dtype, los datos (simbolo
     de referencia, semilla, resolucion, k_cap, val_fraction, tiempos de
-    extrapolacion), las constantes de la estimacion (delta, tol), la
+    extrapolacion, freq_scale y amplitude del GRF), las constantes de la estimacion (delta, tol), la
     OperatorTrainingConfig y, si se da `result`, la mejor epoca y las C_alpha
     que se usaron. Todo son tipos simples: se lee con weights_only=True.
     """
@@ -271,13 +294,9 @@ def save_operator_model(
         "state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
         "arquitectura": asdict(model.config),
         "dtype": _dtype_name(model.dtype),
-        "datos": {
-            "referencia": _reference_spec(reference), "semilla": seed, "resolucion": resolution,
-            "k_cap": k_cap, "val_fraction": val_fraction,
-            "extrapolation_times": (
-                None if extrapolation_times is None else [float(t) for t in extrapolation_times]
-            ),
-        },
+        "datos": _data_spec(
+            reference, resolution, k_cap, seed, val_fraction, extrapolation_times, freq_scale, amplitude
+        ),
         "experimento": {"delta": delta, "estimate_tol": estimate_tol},
         "entrenamiento": asdict(replace(config, class_reference=None)),
     }
@@ -312,10 +331,14 @@ def load_operator_model(path: Union[str, Path], device: Optional[torch.device] =
 
 
 def load_operator_datasets(path: Union[str, Path]) -> FieldDatasets:
-    """Regenera los conjuntos de modelo.pt con `field_datasets` (misma semilla, mismos datos)."""
+    """Regenera los conjuntos de modelo.pt con `field_datasets` (misma semilla, mismos datos).
+
+    Los modelo.pt anteriores a freq_scale / amplitude usan 1 (la convencion del repo).
+    """
     datos = load_operator_checkpoint(path)["datos"]
     return field_datasets(
         _build_reference(datos["referencia"]), datos["resolucion"], datos["semilla"],
         k_cap=datos["k_cap"], val_fraction=datos["val_fraction"],
         extrapolation_times=datos["extrapolation_times"],
+        freq_scale=datos.get("freq_scale", 1.0), amplitude=datos.get("amplitude", 1.0),
     )
