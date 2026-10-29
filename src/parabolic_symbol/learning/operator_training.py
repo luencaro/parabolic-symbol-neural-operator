@@ -330,10 +330,12 @@ def load_operator_model(path: Union[str, Path], device: Optional[torch.device] =
     return model
 
 
-def load_operator_datasets(path: Union[str, Path]) -> FieldDatasets:
+def load_operator_datasets(path: Union[str, Path], dtype: Optional[torch.dtype] = None) -> FieldDatasets:
     """Regenera los conjuntos de modelo.pt con `field_datasets` (misma semilla, mismos datos).
 
     Los modelo.pt anteriores a freq_scale / amplitude usan 1 (la convencion del repo).
+    `dtype` es el de campos y filas (por defecto float64, como `field_datasets`);
+    para regenerarlos en el dtype del modelo guardado, pasar el de `load_operator_model(path).dtype`.
     """
     datos = load_operator_checkpoint(path)["datos"]
     return field_datasets(
@@ -341,4 +343,5 @@ def load_operator_datasets(path: Union[str, Path]) -> FieldDatasets:
         k_cap=datos["k_cap"], val_fraction=datos["val_fraction"],
         extrapolation_times=datos["extrapolation_times"],
         freq_scale=datos.get("freq_scale", 1.0), amplitude=datos.get("amplitude", 1.0),
+        dtype=torch.float64 if dtype is None else dtype,
     )

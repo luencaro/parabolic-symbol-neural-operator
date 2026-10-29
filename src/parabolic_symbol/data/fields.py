@@ -105,12 +105,16 @@ class FieldDatasets:
 
 
 def grf_fields(
-    data: GRFData, ic: Optional[Sequence[int]] = None, times: Optional[Sequence[float]] = None
+    data: GRFData,
+    ic: Optional[Sequence[int]] = None,
+    times: Optional[Sequence[float]] = None,
+    dtype: torch.dtype = torch.float64,
 ) -> FieldData:
     """Campos de las condiciones iniciales `ic` (todas por defecto) en `times` (data.t por defecto).
 
     u(t) = to_physical(exp(-t a(k)) u0_hat(k)), con el simbolo de referencia de
-    `data`, en la malla completa. Se guardan en float64 en CPU.
+    `data`, en la malla completa. Se calculan con numpy (float64) y se guardan
+    en `dtype` en CPU.
     """
     ic = np.arange(data.u0_hat.shape[0]) if ic is None else np.asarray(ic, dtype=int)
     times = data.t if times is None else np.asarray(times, dtype=float)
@@ -118,8 +122,8 @@ def grf_fields(
     u0 = data.to_physical(u0_hat)
     u = np.stack([data.to_physical(np.exp(-t * data.a)[None] * u0_hat) for t in times], axis=1)
     return FieldData(
-        u0=torch.tensor(u0, dtype=torch.float64), u=torch.tensor(u, dtype=torch.float64),
-        t=torch.tensor(times, dtype=torch.float64), ic=ic,
+        u0=torch.tensor(u0, dtype=dtype), u=torch.tensor(u, dtype=dtype),
+        t=torch.tensor(times, dtype=dtype), ic=ic,
     )
 
 
@@ -156,6 +160,7 @@ def field_datasets(
     decay: float = 2.5,
     freq_scale: float = 1.0,
     amplitude: float = 1.0,
+    dtype: torch.dtype = torch.float64,
 ) -> FieldDatasets:
     """Entrenamiento, validacion, prueba y (opcional) extrapolacion como campos completos.
 
@@ -163,6 +168,8 @@ def field_datasets(
     las filas espectrales con que se estiman la banda y las C_alpha; los campos
     tienen todos los modos. `extrapolation_times` debe ser > max(TRAIN_TIMES).
     `freq_scale` y `amplitude` son los del campo aleatorio (ver `data/grf.py`).
+    Campos y filas espectrales quedan en `dtype` (complejo asociado en las
+    filas), en CPU; los GRFData se generan con numpy y no cambian.
     """
     grf_train, grf_test = grf_datasets(
         reference, resolution, seed, k_cap=k_cap, tau=tau, decay=decay,
@@ -176,13 +183,13 @@ def field_datasets(
             raise ValueError(
                 f"los tiempos de extrapolacion deben ser > {grf_train.t.max():g}: {extrapolation_times}"
             )
-        extrapolation = grf_fields(grf_test, times=extrapolation_times)
+        extrapolation = grf_fields(grf_test, times=extrapolation_times, dtype=dtype)
     datasets = FieldDatasets(
-        train=grf_fields(grf_train, train_ic),
-        val=grf_fields(grf_train, val_ic),
-        test=grf_fields(grf_test),
+        train=grf_fields(grf_train, train_ic, dtype=dtype),
+        val=grf_fields(grf_train, val_ic, dtype=dtype),
+        test=grf_fields(grf_test, dtype=dtype),
         extrapolation=extrapolation,
-        rows_train=ic_rows(grf_train, train_ic),
+        rows_train=to_device(ic_rows(grf_train, train_ic), torch.device("cpu"), dtype),
         grf_train=grf_train,
         grf_test=grf_test,
     )

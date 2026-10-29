@@ -123,7 +123,9 @@ $$v_0=P(u_0),\qquad v_{\ell+1}=\sigma\big(W_\ell v_\ell+K_\ell v_\ell+b_\ell\big
 
 - **Símbolo efectivo y modelo guardado.** `EffectiveSymbol(model)` expone $\bar a$ como un `Symbol`, así que se puede pasar a `ParabolicityVerifier` y a `SymbolClassVerifier`; solo existe en el caso lineal. `save_operator_model` escribe `modelo.pt`, y `load_operator_model` y `load_operator_datasets` reconstruyen el modelo y los datos sin el notebook.
 
-El PDNO se construye directamente en GPU y en `float64`.
+El PDNO se construye directamente en el device y el dtype que se le pasan (por defecto, GPU y `float64`). `field_datasets` y `load_operator_datasets` reciben el mismo `dtype`, así que datos, modelo, entrenamiento, evaluación y modelo guardado usan una sola precisión. Los notebooks del PDNO (`06`–`10`) usan `float32` en todo.
+
+- **`PDNOExperiment` (`learning/operator_experiment.py`).** Reúne el flujo de `06`, sección por sección, como `GRFExperiment` reúne el de `02`. Cada método es una sección del notebook: imprime lo mismo que la celda de `06`, guarda sus tablas y figuras y devuelve las tablas. Lo usan `07`–`09`.
 
 ## Estructura
 
@@ -156,6 +158,7 @@ src/parabolic_symbol/
     ├── evaluation.py             # metricas y peor ratio de parabolicidad
     ├── sweep.py                  # barrido de arquitecturas y seleccion
     ├── experiment.py             # GRFExperiment: el flujo completo de un notebook GRF
+    ├── operator_experiment.py    # PDNOExperiment: el flujo completo de un notebook PDNO (07-09)
     ├── operator_training.py      # OperatorTrainingConfig, train_operator y modelo.pt del PDNO
     ├── operator_sweep.py         # barrido de la MLP del simbolo del PDNO (mismas combinaciones que sweep.py)
     └── operator_evaluation.py    # L2 relativa por (u0, t) y metricas por epoca del PDNO
@@ -165,13 +168,19 @@ notebooks/
 ├── 03_calor_2d.ipynb             # lo mismo en T^2
 ├── 04_fraccionario_1d.ipynb      # laplaciano fraccionario |k|^alpha en T^1, alpha in {0.5, 1, 1.5}
 ├── 05_fraccionario_2d.ipynb      # lo mismo en T^2
-└── 06_pdno_calor_1d.ipynb        # PDNO lineal en el calor en T^1
+├── 06_pdno_calor_1d.ipynb        # PDNO lineal en el calor en T^1
+├── 07_pdno_calor_2d.ipynb        # lo mismo en T^2, con PDNOExperiment
+├── 08_pdno_fraccionario_1d.ipynb # PDNO con |k|^alpha en T^1, alpha in {0.5, 1, 1.5}
+└── 09_pdno_fraccionario_2d.ipynb # lo mismo en T^2
 results/                          # una carpeta por notebook: tablas CSV y figuras PNG
 ├── 02_calor_1d/
 ├── 03_calor_2d/
 ├── 04_fraccionario_1d/           # una subcarpeta por alpha y resumen.csv
 ├── 05_fraccionario_2d/
-└── 06_pdno_calor_1d/
+├── 06_pdno_calor_1d/
+├── 07_pdno_calor_2d/
+├── 08_pdno_fraccionario_1d/      # una subcarpeta por alpha y resumen.csv
+└── 09_pdno_fraccionario_2d/
 book/myst.yml                     # Jupyter Book con los notebooks
 ```
 
@@ -192,6 +201,8 @@ book/myst.yml                     # Jupyter Book con los notebooks
   - el símbolo efectivo frente a $|k|^2$ hasta Nyquist;
   - la certificación de cada capa y del símbolo efectivo;
   - la extrapolación temporal, opcional.
+- **`07_pdno_calor_2d`:** el mismo flujo en $\mathbb T^2$ (malla $128\times128$, $k_{\text{cap}}=32$), con `PDNOExperiment`. El símbolo se dibuja contra $|k|$ y se agrega un mapa del error relativo sobre $(k_1,k_2)$. La paridad se comprueba en toda la rejilla, incluidos $k_2=0$ y $k_2<0$, y la reducción se compara también con la FFT completa (`fftn`).
+- **`08_pdno_fraccionario_1d`** y **`09_pdno_fraccionario_2d`:** el PDNO con referencia $a(k)=|k|^\alpha$ y $m=\alpha\in\{0.5,1,1.5\}$, en $\mathbb T^1$ y $\mathbb T^2$; una sección por $\alpha$ y una tabla resumen con las columnas de `04`/`05` y las propias del PDNO.
 
 ## Instalación
 
@@ -208,4 +219,4 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Los notebooks importan `parabolic_symbol` como paquete instalado y se ejecutan desde `notebooks/`. Usan GPU y `float32` si hay CUDA; si no, CPU y `float64`. El notebook `02` exige CUDA. Para el libro: `cd book && jupyter book start`.
+Los notebooks importan `parabolic_symbol` como paquete instalado y se ejecutan desde `notebooks/`. Usan GPU si hay CUDA; si no, CPU. Los notebooks `01`–`05` usan `float64` y los del PDNO (`06`–`10`), `float32`. El notebook `02` exige CUDA. Para el libro: `cd book && jupyter book start`.

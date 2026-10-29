@@ -12,6 +12,9 @@ project:
     - file: ../notebooks/04_fraccionario_1d.ipynb
     - file: ../notebooks/05_fraccionario_2d.ipynb
     - file: ../notebooks/06_pdno_calor_1d.ipynb
+    - file: ../notebooks/07_pdno_calor_2d.ipynb
+    - file: ../notebooks/08_pdno_fraccionario_1d.ipynb
+    - file: ../notebooks/09_pdno_fraccionario_2d.ipynb
 
 site:
   template: book-theme
