@@ -19,8 +19,8 @@ mismo conjunto.
 La banda (c, C) y las C_alpha salen de las filas espectrales (k, t, u0, u_ref)
 de las u0 de entrenamiento (`ic_rows`), en el formato de siempre.
 
-`resample_fields` lleva un FieldData 1D a otra malla (submuestreo o relleno con
-ceros del espectro) para evaluar la invariancia de resolucion.
+`resample_fields` lleva un FieldData 1D o 2D a otra malla (submuestreo o relleno
+con ceros del espectro) para evaluar la invariancia de resolucion.
 """
 from __future__ import annotations
 
@@ -216,8 +216,37 @@ def _zero_pad_spectrum(u: torch.Tensor, resolution: int) -> torch.Tensor:
     return resolution * torch.fft.irfft(padded, n=resolution, dim=-1)
 
 
+def _zero_pad_spectrum_nd(u: torch.Tensor, resolution: int, n: int) -> torch.Tensor:
+    """`_zero_pad_spectrum` en los ultimos n ejes (n >= 2), eje por eje con la FFT completa.
+
+    En cada eje, los modos 0..R/2-1 y -R/2+1..-1 se copian, los nuevos valen 0 y
+    el de Nyquist se reparte a la mitad entre +R/2 y -R/2, como en 1D; asi el
+    espectro sigue siendo hermitico y el resultado es real.
+    """
+    R = u.shape[-1]
+    h = R // 2
+    axes = tuple(range(-n, 0))
+    u_hat = torch.fft.fftn(u, dim=axes) / R**n
+    for axis in axes:
+        def sl(start, stop, axis=axis):
+            index = [slice(None)] * u_hat.dim()
+            index[axis] = slice(start, stop)
+            return tuple(index)
+
+        shape = list(u_hat.shape)
+        shape[axis] = resolution
+        padded = torch.zeros(shape, dtype=u_hat.dtype, device=u.device)
+        padded[sl(0, h)] = u_hat[sl(0, h)]
+        padded[sl(resolution - h + 1, resolution)] = u_hat[sl(h + 1, R)]
+        nyquist = u_hat[sl(h, h + 1)] / 2
+        padded[sl(h, h + 1)] = nyquist
+        padded[sl(resolution - h, resolution - h + 1)] = nyquist
+        u_hat = padded
+    return resolution**n * torch.fft.ifftn(u_hat, dim=axes).real
+
+
 def resample_fields(data: FieldData, resolution: int) -> FieldData:
-    """Los campos u0 y u(t) de `data` (n = 1) en una malla de `resolution` puntos.
+    """Los campos u0 y u(t) de `data` en una malla de `resolution` puntos por eje (n = 1 o 2).
 
     - resolution < data.resolution (debe dividirla): submuestreo, los valores
       exactos de las mismas funciones en la malla gruesa. Los modos por encima
@@ -225,10 +254,11 @@ def resample_fields(data: FieldData, resolution: int) -> FieldData:
       despreciables.
     - resolution > data.resolution (par): relleno con ceros del espectro de
       u0 y de u(t). Como exp(-t a(D)) es diagonal y los modos nuevos valen 0,
-      es la solucion exacta de la misma u0 en la malla fina.
+      es la solucion exacta de la misma u0 en la malla fina. En 2D el relleno
+      se hace eje por eje (`_zero_pad_spectrum_nd`).
     """
-    if data.n != 1:
-        raise ValueError(f"resample_fields solo esta implementado en n = 1: n = {data.n}")
+    if data.n not in (1, 2):
+        raise ValueError(f"resample_fields solo esta implementado en n = 1 y n = 2: n = {data.n}")
     R = data.resolution
     if resolution == R:
         return data
@@ -236,9 +266,14 @@ def resample_fields(data: FieldData, resolution: int) -> FieldData:
         if R % resolution:
             raise ValueError(f"la resolucion {resolution} debe dividir a {R}")
         step = R // resolution
-        u0, u = data.u0[..., ::step].clone(), data.u[..., ::step].clone()
+        index = (Ellipsis,) + (slice(None, None, step),) * data.n
+        u0, u = data.u0[index].clone(), data.u[index].clone()
     else:
         if resolution % 2:
             raise ValueError(f"la resolucion debe ser par: {resolution}")
-        u0, u = _zero_pad_spectrum(data.u0, resolution), _zero_pad_spectrum(data.u, resolution)
+        if data.n == 1:
+            u0, u = _zero_pad_spectrum(data.u0, resolution), _zero_pad_spectrum(data.u, resolution)
+        else:
+            u0 = _zero_pad_spectrum_nd(data.u0, resolution, data.n)
+            u = _zero_pad_spectrum_nd(data.u, resolution, data.n)
     return FieldData(u0=u0, u=u, t=data.t, ic=data.ic)

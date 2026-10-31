@@ -174,8 +174,18 @@ def oracle_bounds(
 # ----------------------------------------------------------------------
 # 3. Constantes C_alpha de la Def. 2.1
 # ----------------------------------------------------------------------
+def precision_eps(dtype) -> float:
+    """eps de maquina de un dtype de numpy o de torch, real o complejo (el de su parte real)."""
+    if hasattr(dtype, "is_complex"):   # torch.dtype
+        import torch
+
+        return float(torch.finfo(dtype.to_real() if dtype.is_complex else dtype).eps)
+    return float(np.finfo(dtype).eps)
+
+
 def class_constants_with_margin(
-    C_raw: ClassConstantsDict, margin: float = 1.5, zero_tol: float = 1e-8
+    C_raw: ClassConstantsDict, margin: float = 1.5, zero_tol: Optional[float] = None,
+    dtype=np.float64,
 ) -> ClassConstantsDict:
     """Margen y piso sobre unas C_alpha estimadas, como en el notebook original.
 
@@ -184,7 +194,14 @@ def class_constants_with_margin(
     constante positiva (el piso). Se toma como nulo todo C_alpha <= zero_tol *
     max C_alpha, porque las diferencias de a_hat no dan 0 exacto sino ruido de
     redondeo. Despues todo se multiplica por `margin`.
+
+    Por defecto zero_tol = max(1e-8, 1e3 eps), con eps el de `dtype`, la
+    precision en que se calcularon las C_alpha (las de los datos: la de las
+    filas espectrales). En float64 es 1e-8, el valor de siempre; en float32,
+    1e3 * 1.19e-7 ~ 1.2e-4, porque el ruido de redondeo de a_hat es mayor.
     """
+    if zero_tol is None:
+        zero_tol = max(1e-8, 1e3 * precision_eps(dtype))
     top = max(C_raw.values())
     positivas = [c for c in C_raw.values() if c > zero_tol * top]
     if not positivas:
@@ -197,7 +214,7 @@ def class_constants_with_margin(
 
 def estimate_class_constants(
     k: np.ndarray, a_hat: np.ndarray, m: float, rho: int, margin: float = 1.5,
-    return_counts: bool = False,
+    return_counts: bool = False, dtype=np.float64,
 ) -> Union[ClassConstantsDict, Tuple[ClassConstantsDict, Dict[Tuple[int, ...], int]]]:
     """C_alpha de la Def. 2.1 desde a_hat, por diferencias finitas hacia adelante.
 
@@ -206,7 +223,8 @@ def estimate_class_constants(
     sobre los k de entrenamiento cuyo estencil {k + beta : beta <= alpha}
     completo esta en el conjunto (la particion por k deja huecos, asi que no se
     usan todos los k). Despues se aplican el piso y el margen de
-    `class_constants_with_margin`.
+    `class_constants_with_margin`, con la tolerancia de cero de `dtype` (la
+    precision de las filas de las que sale a_hat; float64 por defecto).
 
     Con `return_counts=True` devuelve ademas {alpha: numero de k de
     entrenamiento con el estencil completo}, es decir, los k que entran al max.
@@ -240,7 +258,7 @@ def estimate_class_constants(
             raise ValueError(f"ningun k de entrenamiento tiene el estencil completo para alpha={alpha}")
         C_raw[alpha] = mejor
         conteos[alpha] = usados
-    C = class_constants_with_margin(C_raw, margin)
+    C = class_constants_with_margin(C_raw, margin, dtype=dtype)
     return (C, conteos) if return_counts else C
 
 
@@ -288,5 +306,5 @@ def resolve_class_constants(
         return oracle_class_constants(reference, k_max, margin, rho)
     if source == "data":
         k, a_hat = estimate_symbol(train_data, verbose=False)
-        return estimate_class_constants(k, a_hat, m, rho, margin)
+        return estimate_class_constants(k, a_hat, m, rho, margin, dtype=train_data["u_ref"].dtype)
     raise ValueError(f"fuente de C_alpha desconocida {source!r}; usar una de {CLASS_C_SOURCES}")

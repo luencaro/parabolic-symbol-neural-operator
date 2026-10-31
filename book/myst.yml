@@ -15,6 +15,9 @@ project:
     - file: ../notebooks/07_pdno_calor_2d.ipynb
     - file: ../notebooks/08_pdno_fraccionario_1d.ipynb
     - file: ../notebooks/09_pdno_fraccionario_2d.ipynb
+    - file: ../notebooks/11_benchmark_calor_2d.ipynb
+    - file: ../notebooks/12_benchmark_fraccionario_1d.ipynb
+    - file: ../notebooks/13_benchmark_fraccionario_2d.ipynb
 
 site:
   template: book-theme

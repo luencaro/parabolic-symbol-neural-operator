@@ -1,0 +1,13 @@
+,validacion (mejor epoca)
+total,1.535523551865481e-05
+rel_l2,1.535523551865481e-05
+parabolicidad,0.0
+clase,0.0
+peor ratio,0.5945252776145935
+puntos con ratio > 1,0.0
+capas,4
+ancho,128
+dropout_layers,none
+weight_decay,0.0
+mejor_epoca,299
+epocas,300

@@ -159,6 +159,7 @@ src/parabolic_symbol/
     ├── sweep.py                  # barrido de arquitecturas y seleccion
     ├── experiment.py             # GRFExperiment: el flujo completo de un notebook GRF
     ├── operator_experiment.py    # PDNOExperiment: el flujo completo de un notebook PDNO (07-09)
+    ├── benchmark_experiment.py   # BenchmarkExperiment: PDNO guardado frente a FNO (11-13)
     ├── operator_training.py      # OperatorTrainingConfig, train_operator y modelo.pt del PDNO
     ├── operator_sweep.py         # barrido de la MLP del simbolo del PDNO (mismas combinaciones que sweep.py)
     └── operator_evaluation.py    # L2 relativa por (u0, t) y metricas por epoca del PDNO
@@ -171,7 +172,10 @@ notebooks/
 ├── 06_pdno_calor_1d.ipynb        # PDNO lineal en el calor en T^1
 ├── 07_pdno_calor_2d.ipynb        # lo mismo en T^2, con PDNOExperiment
 ├── 08_pdno_fraccionario_1d.ipynb # PDNO con |k|^alpha en T^1, alpha in {0.5, 1, 1.5}
-└── 09_pdno_fraccionario_2d.ipynb # lo mismo en T^2
+├── 09_pdno_fraccionario_2d.ipynb # lo mismo en T^2
+├── 11_benchmark_calor_2d.ipynb   # PDNO de 07 frente a FNO de neuraloperator, calor en T^2
+├── 12_benchmark_fraccionario_1d.ipynb # lo mismo con |k|^alpha en T^1 (PDNO de 08)
+└── 13_benchmark_fraccionario_2d.ipynb # lo mismo con |k|^alpha en T^2 (PDNO de 09)
 results/                          # una carpeta por notebook: tablas CSV y figuras PNG
 ├── 02_calor_1d/
 ├── 03_calor_2d/
@@ -180,7 +184,10 @@ results/                          # una carpeta por notebook: tablas CSV y figur
 ├── 06_pdno_calor_1d/
 ├── 07_pdno_calor_2d/
 ├── 08_pdno_fraccionario_1d/      # una subcarpeta por alpha y resumen.csv
-└── 09_pdno_fraccionario_2d/
+├── 09_pdno_fraccionario_2d/
+├── 11_benchmark_calor_2d/
+├── 12_benchmark_fraccionario_1d/  # una subcarpeta por alpha
+└── 13_benchmark_fraccionario_2d/
 book/myst.yml                     # Jupyter Book con los notebooks
 ```
 
@@ -203,6 +210,13 @@ book/myst.yml                     # Jupyter Book con los notebooks
   - la extrapolación temporal, opcional.
 - **`07_pdno_calor_2d`:** el mismo flujo en $\mathbb T^2$ (malla $128\times128$, $k_{\text{cap}}=32$), con `PDNOExperiment`. El símbolo se dibuja contra $|k|$ y se agrega un mapa del error relativo sobre $(k_1,k_2)$. La paridad se comprueba en toda la rejilla, incluidos $k_2=0$ y $k_2<0$, y la reducción se compara también con la FFT completa (`fftn`).
 - **`08_pdno_fraccionario_1d`** y **`09_pdno_fraccionario_2d`:** el PDNO con referencia $a(k)=|k|^\alpha$ y $m=\alpha\in\{0.5,1,1.5\}$, en $\mathbb T^1$ y $\mathbb T^2$; una sección por $\alpha$ y una tabla resumen con las columnas de `04`/`05` y las propias del PDNO.
+- **`11_benchmark_calor_2d`**, **`12_benchmark_fraccionario_1d`** y **`13_benchmark_fraccionario_2d`:** el PDNO elegido en `07`, `08` y `09` (sin reentrenar: se carga su `modelo.pt` y se comprueba su error de prueba) frente a un FNO de `neuraloperator` con su propio barrido, con las secciones de `10_benchmark_calor_1d` salvo la comparación con el paper. Incluyen:
+  - el barrido y la selección del FNO, con la misma `TRAIN_CONFIG` que el PDNO;
+  - las curvas de entrenamiento de los dos (las del PDNO, de su `historia.csv`);
+  - el error en prueba por tiempo, la extrapolación temporal ($t\in(0.95,3]$) y la invariancia de resolución (1D: 256 a 2048; 2D: $64^2$ a $256^2$);
+  - el símbolo y la certificación del PDNO, y el FNO guardado.
+
+  Hay que correr antes el notebook PDNO correspondiente. Cada gráfica es una imagen aparte.
 
 ## Instalación
 

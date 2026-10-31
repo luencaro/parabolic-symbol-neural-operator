@@ -49,7 +49,8 @@ from .estimation import (
 )
 from .evaluation import symbol_report
 from .experiment import CERT_LAM, SUMMARY_COLS, SWEEP, SWEEP_COLS, class_C_table, relative_symbol_error
-from .operator_evaluation import field_errors
+from .figures import summary_figure
+from .operator_evaluation import OPERATOR_METRICS, field_errors
 from .operator_sweep import OperatorSweepRun, operator_sweep_table, run_operator_sweep
 from .operator_training import (
     OperatorTrainingConfig, OperatorTrainingResult, load_operator_model, save_operator_model,
@@ -61,6 +62,7 @@ from ..utils import complex_dtype, default_device
 LINEAR_ARCH = dict(width=1, use_W=False, bias=False, activation="identity", lift="identity", project="identity")
 
 MODEL_FILE = "modelo.pt"
+HISTORY_FILE = "historia.csv"   # perdidas por epoca de la corrida elegida (seccion 5)
 
 # Columnas de resumen.csv en 08 y 09: las de 04 / 05 (SUMMARY_COLS) y las propias del PDNO.
 PDNO_SUMMARY_COLS = SUMMARY_COLS + [
@@ -118,6 +120,7 @@ class PDNOExperiment:
     best: OperatorSweepRun = field(init=False, repr=False)
     err_test: np.ndarray = field(init=False, repr=False)
     summary: Dict = field(init=False, repr=False)
+    saved_model: Optional[PDNO] = field(init=False, default=None, repr=False)   # ver `use_saved_model`
 
     def __post_init__(self) -> None:
         self.results = Path(self.results)
@@ -147,7 +150,18 @@ class PDNOExperiment:
 
     @property
     def model(self) -> PDNO:
-        return self.best.model
+        """La corrida elegida del barrido, o el modelo de `use_saved_model`."""
+        return self.saved_model if self.saved_model is not None else self.best.model
+
+    def use_saved_model(self, model: PDNO, bounds: Bounds) -> None:
+        """Usa un PDNO ya entrenado (p. ej. el de modelo.pt) en lugar de la corrida del barrido.
+
+        Con datos (`ds`) y esto, las secciones que solo miran el modelo (condiciones
+        iniciales, simbolo, error del simbolo, multiplicador, certificacion y clase) se
+        pueden repetir sin barrido; asi las usan los benchmarks contra el FNO.
+        """
+        self.saved_model = model
+        self.bounds = bounds
 
     @property
     def result(self) -> OperatorTrainingResult:
@@ -286,9 +300,11 @@ class PDNOExperiment:
         )
         self.kappa = probe.theoretical_kappa(self.omega)
 
-        # Todos los alpha con |alpha| <= rho del simbolo aprendido (rho = n + 1).
+        # Todos los alpha con |alpha| <= rho del simbolo aprendido (rho = n + 1), con la tolerancia de
+        # cero de la precision de las filas, la misma que usa train_operator.
         self.class_C, self.class_C_counts = estimate_class_constants(
-            k_est, a_hat, self.m, rho=probe.rho, margin=self.class_margin, return_counts=True
+            k_est, a_hat, self.m, rho=probe.rho, margin=self.class_margin, return_counts=True,
+            dtype=self.ds.rows_train["u_ref"].dtype,
         )
         self.class_C_oracle = oracle_class_constants(
             self.reference, self.k_max, margin=self.class_margin, rho=probe.rho
@@ -466,9 +482,18 @@ class PDNOExperiment:
     # 5. Curvas de entrenamiento
     # ------------------------------------------------------------------
     def curves(self) -> None:
-        """Perdida total y cada termino por epoca, en entrenamiento y validacion; una imagen por termino."""
+        """Perdida total y cada termino por epoca, en entrenamiento y validacion; una imagen por termino.
+
+        Guarda ademas historia.csv (una fila por epoca, columnas train_<metrica> y val_<metrica>), que
+        leen los benchmarks contra el FNO sin reentrenar el PDNO.
+        """
         history = self.result.history
         epochs = np.arange(1, len(history["train"]["total"]) + 1)
+        historia = pd.DataFrame(
+            {f"{split}_{key}": history[split][key] for split in ("train", "val") for key in OPERATOR_METRICS},
+            index=pd.Index(epochs, name="epoca"),
+        )
+        historia.to_csv(self.results / HISTORY_FILE)
         paneles = [
             ("total", "perdida total", "perdida_total.png"),
             ("rel_l2", r"$L^2$ relativa", "perdida_rel_l2.png"),
@@ -879,37 +904,10 @@ def pdno_summary_table(experiments: Dict[float, PDNOExperiment], results: Path) 
 
 
 def pdno_summary_figures(resumen, results: Path) -> None:
-    """Las dos graficas de `figures.summary_figure`, cada una en su imagen.
+    """Las graficas de `figures.summary_figure`, cada una en su imagen.
 
     resumen_error_prueba.png: error en prueba (pares (k, t) y espacio fisico) contra alpha;
     resumen_certificacion.png: peor ratio de la certificacion contra alpha, con la cota ratio = 1.
     `resumen` es la ruta de resumen.csv o la tabla de `pdno_summary_table`.
     """
-    tabla = resumen if isinstance(resumen, pd.DataFrame) else pd.read_csv(resumen)
-    tabla = tabla.sort_values("alpha")
-    results = Path(results)
-
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    for i, (col, etiqueta) in enumerate((("test_rel_l2", "pares (k, t)"),
-                                         ("test_rel_l2_fisico", "espacio fisico"))):
-        ax.semilogy(tabla["alpha"], tabla[col], "o-", color=f"C{i}", label=etiqueta)
-    ax.set_ylabel(r"error relativo $L^2$ en prueba")
-    ax.set_title("Error en prueba")
-    ax.legend()
-    graficas = [(fig, ax, "resumen_error_prueba.png")]
-
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.plot(tabla["alpha"], tabla["peor_ratio"], "o-", color="C0")
-    ax.axhline(1.0, color="0.3", ls="--", lw=1, label="cota de la Def. 2.3 (ratio = 1)")
-    ax.set_ylabel("peor ratio de la certificacion")
-    ax.set_title("Certificacion de parabolicidad")
-    ax.legend()
-    graficas.append((fig, ax, "resumen_certificacion.png"))
-
-    for fig, ax, nombre in graficas:
-        ax.set_xlabel(r"$\alpha$")
-        ax.set_xticks(tabla["alpha"])
-        ax.grid(alpha=0.3, which="both")
-        fig.tight_layout()
-        fig.savefig(results / nombre, dpi=150)
-    plt.show()
+    summary_figure(resumen, results)

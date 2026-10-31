@@ -1,4 +1,4 @@
 comprobacion,valor,esperado
 "paridad: max |a(k) - a(-k)|, |k| <= 512",0.0,0
-"reduccion: max error relativo (4 u0 de prueba, t = [0.05, 0.5, 1.0])",4.479021555420475e-16,~1e-14
-semigrupo: max ||S(t+s)u0 - S(t)S(s)u0|| / ||u0|| (5 pares),1.767198196003484e-16,~1e-14
+"reduccion: max error relativo (4 u0 de prueba, t = [0.05, 0.5, 1.0])",2.0948664314346388e-07,~1e-7
+semigrupo: max ||S(t+s)u0 - S(t)S(s)u0|| / ||u0|| (5 pares),1.1037679570335968e-07,~1e-7

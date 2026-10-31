@@ -614,10 +614,11 @@ class GRFExperiment:
     # 8. Simbolo aprendido vs referencia
     # ------------------------------------------------------------------
     def symbol_figure(self) -> None:
-        """a_theta frente a la referencia en |k_i| <= k_max.
+        """a_theta frente a la referencia en |k_i| <= k_max, cada grafica en su imagen.
 
-        1D: simbolo vs |k|, paridad y error absoluto vs k. 2D: simbolo vs |k|,
-        paridad, error absoluto vs |k| y mapa del error relativo sobre (k1, k2).
+        simbolo.png (simbolo vs |k|), simbolo_paridad.png y simbolo_error.png (error
+        absoluto vs k en 1D, vs |k| en 2D); en 2D, ademas, simbolo_error_mapa.png con el
+        error relativo sobre (k1, k2).
         """
         k_arr = k_grid(self.n, self.k_max)
         a_ref = symbol_values(self.reference, k_arr)
@@ -626,53 +627,58 @@ class GRFExperiment:
         err = np.abs(a_theta - a_ref)
         rel = relative_symbol_error(a_theta, a_ref)
 
-        fig, axes = plt.subplots(1, 3 if self.n == 1 else 4, figsize=(16 if self.n == 1 else 21, 4.5))
-
         # (a) La curva del simbolo contra |k| (en 2D el simbolo es radial).
+        fig, ax = plt.subplots(figsize=(6.5, 4.5))
         order = np.argsort(norm_k)
-        axes[0].plot(norm_k[order], a_ref[order], "k-", lw=1.5, label="simbolo analitico")
-        axes[0].scatter(norm_k, a_theta, s=10 if self.n == 1 else 3, color="C1", label="simbolo aprendido")
-        axes[0].set_xlabel(r"$|k|$")
-        axes[0].set_ylabel(r"$a(k)$")
-        axes[0].set_title(r"Simbolo vs $|k|$")
-        axes[0].legend()
-        axes[0].grid(alpha=0.3)
+        ax.plot(norm_k[order], a_ref[order], "k-", lw=1.5, label="simbolo analitico")
+        ax.scatter(norm_k, a_theta, s=10 if self.n == 1 else 3, color="C1", label="simbolo aprendido")
+        ax.set_xlabel(r"$|k|$")
+        ax.set_ylabel(r"$a(k)$")
+        ax.set_title(r"Simbolo vs $|k|$")
+        ax.legend()
+        ax.grid(alpha=0.3)
+        self._save(fig, "simbolo.png")
 
         # (b) Paridad: sobre la diagonal significa que a_theta acerto.
+        fig, ax = plt.subplots(figsize=(5.5, 5))
         lo, hi = min(a_ref.min(), a_theta.min()), max(a_ref.max(), a_theta.max())
         pad = 0.05 * (hi - lo)
         lims = [lo - pad, hi + pad]
-        axes[1].plot(lims, lims, "k--", lw=1, label=r"$a_\theta = a_{\text{ref}}$")
-        axes[1].scatter(a_ref, a_theta, s=10 if self.n == 1 else 3, color="C1")
-        axes[1].set_xlim(lims)
-        axes[1].set_ylim(lims)
-        axes[1].set_aspect("equal")
-        axes[1].set_xlabel(r"simbolo analitico $a_{\mathrm{ref}}(k)$")
-        axes[1].set_ylabel(r"simbolo aprendido $a_\theta(k)$")
-        axes[1].set_title("Paridad")
-        axes[1].legend()
-        axes[1].grid(alpha=0.3)
+        ax.plot(lims, lims, "k--", lw=1, label=r"$a_\theta = a_{\text{ref}}$")
+        ax.scatter(a_ref, a_theta, s=10 if self.n == 1 else 3, color="C1")
+        ax.set_xlim(lims)
+        ax.set_ylim(lims)
+        ax.set_aspect("equal")
+        ax.set_xlabel(r"simbolo analitico $a_{\mathrm{ref}}(k)$")
+        ax.set_ylabel(r"simbolo aprendido $a_\theta(k)$")
+        ax.set_title("Paridad")
+        ax.legend()
+        ax.grid(alpha=0.3)
+        self._save(fig, "simbolo_paridad.png")
 
         # (c) Error absoluto: contra k en 1D, contra |k| en 2D.
+        fig, ax = plt.subplots(figsize=(6.5, 4.5))
         if self.n == 1:
-            axes[2].plot(k_arr[:, 0], err, "o-", color="C1", ms=4)
-            axes[2].set_xlabel(r"$k$")
+            ax.plot(k_arr[:, 0], err, "o-", color="C1", ms=4)
+            ax.set_xlabel(r"$k$")
         else:
-            axes[2].scatter(norm_k, err, s=3, color="C1")
-            axes[2].set_xlabel(r"$|k|$")
-        axes[2].set_title(rf"$|a_\theta(k) - |k|^{{{self.reference.m:g}}}|$")
-        axes[2].grid(alpha=0.3)
+            ax.scatter(norm_k, err, s=3, color="C1")
+            ax.set_xlabel(r"$|k|$")
+        ax.set_title(rf"$|a_\theta(k) - |k|^{{{self.reference.m:g}}}|$")
+        ax.grid(alpha=0.3)
+        self._save(fig, "simbolo_error.png")
 
         # (d) 2D: error relativo sobre (k1, k2).
         if self.n == 2:
             side = 2 * self.k_max + 1
             ext = [-self.k_max - 0.5, self.k_max + 0.5] * 2
-            im = axes[3].imshow(rel.reshape(side, side).T, origin="lower", extent=ext)
-            axes[3].set_title(r"$|a_\theta(k) - a(k)|\,/\,a(k)$")
-            axes[3].set_xlabel(r"$k_1$")
-            axes[3].set_ylabel(r"$k_2$")
-            fig.colorbar(im, ax=axes[3])
-        self._save(fig, "simbolo.png")
+            fig, ax = plt.subplots(figsize=(6, 5))
+            im = ax.imshow(rel.reshape(side, side).T, origin="lower", extent=ext)
+            ax.set_title(r"$|a_\theta(k) - a(k)|\,/\,a(k)$")
+            ax.set_xlabel(r"$k_1$")
+            ax.set_ylabel(r"$k_2$")
+            fig.colorbar(im, ax=ax)
+            self._save(fig, "simbolo_error_mapa.png")
 
         print(f"error relativo medio = {rel.mean():.3f}, maximo = {rel.max():.3f}  "
               f"(|k_i| <= {self.k_max}, k = 0 excluido del cociente)")

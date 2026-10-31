@@ -1,9 +1,12 @@
 """Figuras de resultados a partir de un modelo guardado (modelo.pt), en n = 1 y n = 2.
 
 Cada funcion recibe el simbolo aprendido (`load_experiment_model`) y los datos
-regenerados (`GRFExperiment.from_checkpoint` + `regenerate_data`), guarda la
-figura en la carpeta de resultados del experimento y la devuelve cerrada, asi
-que en un notebook se muestra una sola vez como valor de la celda.
+regenerados (`GRFExperiment.from_checkpoint` + `regenerate_data`) y guarda sus
+graficas en la carpeta de resultados del experimento, cada una en su propia
+imagen. Las que dan una sola grafica la devuelven cerrada, asi que en un
+notebook se muestra una sola vez como valor de la celda; las que dan varias las
+muestran una por una (`_save_show`) y devuelven None. `name` es el nombre de la
+imagen, o la raiz de los nombres cuando son varias (campo.png -> campo_*.png).
 
 1. `field_figure`: campo u(t, x) verdadero, predicho y error, una condicion inicial.
 2. `multiplier_figure`: e^{-t a_theta(k)}, e^{-t a(k)} y su diferencia sobre (k, t).
@@ -12,7 +15,7 @@ que en un notebook se muestra una sola vez como valor de la celda.
 5. `symbol_error_figure`: error relativo del simbolo contra |k|, entrenamiento / validacion.
 6. `power_spectrum_figure`: espectro de potencia medio verdadero frente a predicho.
 
-`summary_figure` resume los notebooks con varios alpha (resumen.csv).
+`summary_figure` resume los notebooks con varios alpha (resumen.csv), en dos imagenes.
 
 Colores: RdBu_r centrada en 0 para campos y errores con signo (misma escala en
 cada fila), viridis para magnitudes y curvas ordenadas por t, tab10 solo para
@@ -49,6 +52,18 @@ def _save(fig, results: PathLike, name: str):
     return fig
 
 
+def _save_show(fig, results: PathLike, name: str) -> None:
+    """Guarda una de varias graficas de una funcion y la muestra (y cierra) en el notebook."""
+    fig.savefig(Path(results) / name, dpi=150, bbox_inches="tight")
+    plt.show()
+    plt.close(fig)
+
+
+def _stem(name: str) -> str:
+    """Raiz de los nombres de varias imagenes: campo.png -> campo."""
+    return Path(name).stem
+
+
 def _a_theta(symbol: ParabolicMLPSymbol, k: np.ndarray) -> np.ndarray:
     return np.real(symbol.evaluate_batch(k)).astype(float)
 
@@ -68,9 +83,9 @@ def field_figure(
 ):
     """u(t, x) exacto, el de a_theta y su diferencia, para la condicion inicial `ic`.
 
-    1D: tres mapas sobre (x, t) con t en [0, 1]. 2D: tres filas (verdadero,
-    predicho, error) y una columna por t de `times`. Verdadero y predicho
-    comparten escala; el error tiene la suya, ambas centradas en 0.
+    1D: tres mapas sobre (x, t) con t en [0, 1], <raiz>_{verdadero,predicho,error}.png.
+    2D: un mapa por campo y por t de `times`, <raiz>_{verdadero,predicho,error}_t<t>.png.
+    Verdadero y predicho comparten escala; el error tiene la suya, ambas centradas en 0.
     """
     a_theta = _a_theta(symbol, data.k)
     u0_hat = data.u0_hat[ic]
@@ -84,15 +99,15 @@ def field_figure(
         filas = [("verdadero", true), ("predicho", pred), ("error (predicho - verdadero)", pred - true)]
         v_field = float(np.abs(true).max())
         v_err = float(np.abs(pred - true).max()) or 1.0
-        fig, axes = plt.subplots(3, 1, figsize=(8, 9), sharex=True, constrained_layout=True)
-        for ax, (titulo, img), v in zip(axes, filas, (v_field, v_field, v_err)):
+        for (titulo, img), v, sufijo in zip(filas, (v_field, v_field, v_err), ("verdadero", "predicho", "error")):
+            fig, ax = plt.subplots(figsize=(8, 3.6), constrained_layout=True)
             im = _signed(ax, img, v, [0, 2 * np.pi, 0, 1], origin="lower", aspect="auto")
+            ax.set_xlabel("x")
             ax.set_ylabel("t")
-            ax.set_title(titulo)
+            ax.set_title(f"Campo u(t, x), condicion inicial {ic} de prueba: {titulo}")
             fig.colorbar(im, ax=ax)
-        axes[-1].set_xlabel("x")
-        fig.suptitle(f"Campo u(t, x), condicion inicial {ic} de prueba")
-        return _save(fig, results, name)
+            _save_show(fig, results, f"{_stem(name)}_{sufijo}.png")
+        return None
 
     times = np.asarray(times, dtype=float)
     true = np.stack([campo(data.a, t) for t in times])
@@ -100,17 +115,16 @@ def field_figure(
     filas = [("verdadero", true), ("predicho", pred), ("error", pred - true)]
     v_field = float(np.abs(true).max())
     v_err = float(np.abs(pred - true).max()) or 1.0
-    fig, axes = plt.subplots(3, len(times), figsize=(4 * len(times), 11), constrained_layout=True)
-    for fila, ((titulo, imgs), v) in enumerate(zip(filas, (v_field, v_field, v_err))):
+    for (titulo, imgs), v in zip(filas, (v_field, v_field, v_err)):
         for col, t in enumerate(times):
-            ax = axes[fila, col]
+            fig, ax = plt.subplots(figsize=(5.5, 4.5), constrained_layout=True)
             im = _signed(ax, imgs[col].T, v, [0, 2 * np.pi, 0, 2 * np.pi], origin="lower")
-            ax.set_title(f"{titulo}, t = {t:g}")
+            ax.set_title(f"condicion inicial {ic} de prueba: {titulo}, t = {t:g}")
             ax.set_xlabel(r"$x_1$")
             ax.set_ylabel(r"$x_2$")
-        fig.colorbar(im, ax=axes[fila, :], shrink=0.9)
-    fig.suptitle(f"Campo u(t, x), condicion inicial {ic} de prueba")
-    return _save(fig, results, name)
+            fig.colorbar(im, ax=ax)
+            _save_show(fig, results, f"{_stem(name)}_{titulo}_t{t:g}.png")
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -120,7 +134,8 @@ def multiplier_figure(
     symbol: ParabolicMLPSymbol, reference: Symbol, results: PathLike, K: int,
     t_max: float = 1.0, name: str = "multiplicador.png",
 ):
-    """e^{-t a_theta(k)}, e^{-t a(k)} y su diferencia sobre (k, t), k en [-K, K].
+    """e^{-t a_theta(k)}, e^{-t a(k)} y su diferencia sobre (k, t), k en [-K, K], en tres
+    imagenes: <raiz>_aprendido.png, <raiz>_exacto.png y <raiz>_diferencia.png.
 
     En 2D se dibuja contra |k|: a se promedia sobre los k de la rejilla
     |k_i| <= K con el mismo |k| (el simbolo es radial).
@@ -140,19 +155,22 @@ def multiplier_figure(
     M_ref = np.exp(-np.multiply.outer(t, a_ref))
     diff = M_theta - M_ref
 
-    fig, axes = plt.subplots(1, 3, figsize=(17, 4.5), constrained_layout=True)
-    for ax, img, titulo in ((axes[0], M_theta, r"$e^{-t\,a_\theta(k)}$"), (axes[1], M_ref, r"$e^{-t\,a(k)}$")):
-        im = ax.pcolormesh(x, t, img, cmap="viridis", vmin=0.0, vmax=1.0, shading="nearest")
-        ax.set_title(titulo)
-        fig.colorbar(im, ax=ax)
     v = float(np.abs(diff).max()) or 1.0
-    im = axes[2].pcolormesh(x, t, diff, cmap="RdBu_r", norm=TwoSlopeNorm(0.0, -v, v), shading="nearest")
-    axes[2].set_title(r"$e^{-t\,a_\theta(k)} - e^{-t\,a(k)}$")
-    fig.colorbar(im, ax=axes[2])
-    for ax in axes:
+    paneles = (
+        ("aprendido", M_theta, r"$e^{-t\,a_\theta(k)}$", dict(cmap="viridis", vmin=0.0, vmax=1.0)),
+        ("exacto", M_ref, r"$e^{-t\,a(k)}$", dict(cmap="viridis", vmin=0.0, vmax=1.0)),
+        ("diferencia", diff, r"$e^{-t\,a_\theta(k)} - e^{-t\,a(k)}$",
+         dict(cmap="RdBu_r", norm=TwoSlopeNorm(0.0, -v, v))),
+    )
+    for sufijo, img, titulo, estilo in paneles:
+        fig, ax = plt.subplots(figsize=(6.5, 4.5), constrained_layout=True)
+        im = ax.pcolormesh(x, t, img, shading="nearest", **estilo)
+        ax.set_title(titulo)
         ax.set_xlabel(xlabel)
         ax.set_ylabel("t")
-    return _save(fig, results, name)
+        fig.colorbar(im, ax=ax)
+        _save_show(fig, results, f"{_stem(name)}_{sufijo}.png")
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -174,14 +192,17 @@ def symbol_extrapolation_figure(
     symbol: ParabolicMLPSymbol, reference: Symbol, results: PathLike, k_window: int,
     r_max: float = 1000.0, name: str = "simbolo_extrapolacion.png",
 ):
-    """a_theta(k) frente a la referencia en log-log hasta |k| = r_max, y h_theta = a_theta/<k>^m.
+    """a_theta(k) frente a la referencia en log-log hasta |k| = r_max (<raiz>.png), y
+    h_theta = a_theta/<k>^m con la banda (<raiz>_banda.png).
 
     Se sombrea |k| <= k_window (= k_cap), la parte de la ventana de entrenamiento
     |k|_inf <= k_cap que cubre todas las direcciones. En 2D se toman las
     direcciones del eje y de la diagonal.
     """
     puntos = _radial_points(symbol.n, r_max)
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
+    fig_a, ax_a = plt.subplots(figsize=(7, 5), constrained_layout=True)
+    fig_h, ax_h = plt.subplots(figsize=(7, 5), constrained_layout=True)
+    axes = (ax_a, ax_h)
     todos = np.concatenate(list(puntos.values()))
     orden = np.argsort(np.linalg.norm(todos, axis=1))
     todos = todos[orden]
@@ -210,7 +231,9 @@ def symbol_extrapolation_figure(
     axes[1].set_title(rf"Banda: $c = {symbol.c:.3g}$, $C = {symbol.C:.3g}$, $m = {symbol.m:g}$")
     for ax in axes:
         ax.legend(fontsize=8)
-    return _save(fig, results, name)
+    _save_show(fig_a, results, name)
+    _save_show(fig_h, results, f"{_stem(name)}_banda.png")
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -316,23 +339,29 @@ def power_spectrum_figure(
 # Resumen de los notebooks con varios alpha
 # ----------------------------------------------------------------------
 def summary_figure(resumen: Union[PathLike, pd.DataFrame], results: PathLike, name: str = "resumen.png"):
-    """Error en prueba y peor ratio de certificacion contra alpha, de resumen.csv."""
+    """Error en prueba (<raiz>_error_prueba.png) y peor ratio de certificacion
+    (<raiz>_certificacion.png) contra alpha, de resumen.csv; cada una en su imagen."""
     tabla = resumen if isinstance(resumen, pd.DataFrame) else pd.read_csv(resumen)
     tabla = tabla.sort_values("alpha")
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
+
+    fig_e, ax_e = plt.subplots(figsize=(6.5, 4.5), constrained_layout=True)
     for i, (col, etiqueta) in enumerate((("test_rel_l2", "pares (k, t)"),
                                          ("test_rel_l2_fisico", "espacio fisico"))):
-        axes[0].semilogy(tabla["alpha"], tabla[col], "o-", color=f"C{i}", label=etiqueta)
-    axes[0].set_ylabel(r"error relativo $L^2$ en prueba")
-    axes[0].set_title("Error en prueba")
-    axes[0].legend()
-    axes[1].plot(tabla["alpha"], tabla["peor_ratio"], "o-", color="C0")
-    axes[1].axhline(1.0, color="0.3", ls="--", lw=1, label="cota de la Def. 2.3 (ratio = 1)")
-    axes[1].set_ylabel("peor ratio de la certificacion")
-    axes[1].set_title("Certificacion de parabolicidad")
-    axes[1].legend()
-    for ax in axes:
+        ax_e.semilogy(tabla["alpha"], tabla[col], "o-", color=f"C{i}", label=etiqueta)
+    ax_e.set_ylabel(r"error relativo $L^2$ en prueba")
+    ax_e.set_title("Error en prueba")
+    ax_e.legend()
+
+    fig_c, ax_c = plt.subplots(figsize=(6.5, 4.5), constrained_layout=True)
+    ax_c.plot(tabla["alpha"], tabla["peor_ratio"], "o-", color="C0")
+    ax_c.axhline(1.0, color="0.3", ls="--", lw=1, label="cota de la Def. 2.3 (ratio = 1)")
+    ax_c.set_ylabel("peor ratio de la certificacion")
+    ax_c.set_title("Certificacion de parabolicidad")
+    ax_c.legend()
+
+    for fig, ax, sufijo in ((fig_e, ax_e, "error_prueba"), (fig_c, ax_c, "certificacion")):
         ax.set_xlabel(r"$\alpha$")
         ax.set_xticks(tabla["alpha"])
         ax.grid(alpha=0.3, which="both")
-    return _save(fig, results, name)
+        _save_show(fig, results, f"{_stem(name)}_{sufijo}.png")
+    return None
