@@ -1,0 +1,7 @@
+simbolo,K,region,puntos,max_ratio,satisfecha
+capa 0,64,dentro,80625,0.6546453459449727,True
+capa 0,128,fuera,160625,0.6546453459449727,True
+capa 0,192,fuera,240625,0.6546453459449727,True
+efectivo,64,dentro,80625,0.6546453459449727,True
+efectivo,128,fuera,160625,0.6546453459449727,True
+efectivo,192,fuera,240625,0.6546453459449727,True
