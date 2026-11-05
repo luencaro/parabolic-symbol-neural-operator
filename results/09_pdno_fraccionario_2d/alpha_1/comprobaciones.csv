@@ -1,0 +1,5 @@
+comprobacion,valor,esperado
+"paridad: max |a(k) - a(-k)|, |k_i| <= 64, 16,641 k",0.0,0
+"reduccion: max error relativo (4 u0 de prueba, t = [0.05, 0.5, 1.0])",3.0322073030220054e-07,~1e-06
+"reduccion (fftn completa): max error relativo (4 u0 de prueba, t = [0.05, 0.5, 1.0])",5.078991875961947e-07,~1e-06
+semigrupo: max ||S(t+s)u0 - S(t)S(s)u0|| / ||u0|| (5 pares),1.5728053881503e-07,~1e-06

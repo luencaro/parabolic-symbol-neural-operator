@@ -1,0 +1,12 @@
+,PDNO guardado
+c,0.6363960919427577
+C,1.0997315654786912
+m,1.0
+kappa,2.222222261069919
+mlp_simbolo,"(128, 128)"
+weight_decay,0.0
+parametros,17025
+mejor_epoca,299
+epocas,300
+rel_l2_prueba (recalculado),0.001551865367218852
+rel_l2_prueba (prueba.csv),0.0015518654
