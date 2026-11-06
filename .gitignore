@@ -6,3 +6,4 @@ __pycache__/
 venv/
 .ipynb_checkpoints/
 book/_build/results/13_benchmark_fraccionario_2d/alpha_0.5/modelo_fno.pt
+results/13_benchmark_fraccionario_2d/alpha_0.5/modelo_fno.pt
